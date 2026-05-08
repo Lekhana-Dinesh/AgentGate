@@ -2,21 +2,33 @@
 
 ## Goal
 
-AgentGate now includes a lightweight abuse-protection layer for sensitive control-plane endpoints.
+AgentGate includes an abuse-protection layer for sensitive control-plane endpoints that works in two modes:
 
-It is designed to:
+- `in_memory` for local development and tests
+- `redis` for multi-instance and production deployments
 
-- stay simple for local development
-- be tunable through env vars
-- avoid changing the core gateway or approval architecture
-- leave room for a future Redis-backed implementation
+The implementation preserves the existing route-level limiter hooks and keeps local setup light while allowing a production-safe distributed provider.
 
-## Current backend
+## Provider selection
 
-- current implementation: in-memory
-- current scope: single API process
-- current behavior in `development` and `test`: disabled by default unless explicitly enabled
-- current behavior outside `development` and `test`: enabled by default unless explicitly disabled
+Environment variables:
+
+- `AGENTGATE_RATE_LIMIT_PROVIDER=in_memory|redis`
+- `AGENTGATE_REDIS_URL=redis://...`
+- `AGENTGATE_RATE_LIMIT_ENABLED=true|false`
+- `AGENTGATE_ALLOW_IN_MEMORY_RATE_LIMIT_IN_PRODUCTION=true|false`
+- `AGENTGATE_RATE_LIMIT_FAIL_OPEN_ON_BACKEND_ERROR=true|false`
+
+Behavior:
+
+- `development` and `test`
+  - rate limiting is disabled by default unless explicitly enabled
+  - `in_memory` is the default provider
+- production-like environments
+  - rate limiting is enabled by default unless explicitly disabled
+  - `redis` is the expected provider for multi-instance safety
+  - `in_memory` is rejected unless `AGENTGATE_ALLOW_IN_MEMORY_RATE_LIMIT_IN_PRODUCTION=true`
+  - if `AGENTGATE_RATE_LIMIT_PROVIDER=redis`, `AGENTGATE_REDIS_URL` is required at startup
 
 ## Protected endpoints
 
@@ -29,6 +41,17 @@ It is designed to:
 - `POST /v1/approvals/{approval_id}/reject`
 - `POST /v1/audit-exports/{config_id}/run`
 - `POST /v1/retention/purge`
+- `POST /v1/jobs/{job_id}/retry`
+- `POST /v1/audit-integrity/verify`
+- `POST /v1/audit-integrity/backfill`
+
+## Algorithm
+
+- Provider algorithm: fixed-window counters
+- Redis implementation: per-window hashed keys with atomic `INCR` + `EXPIRE` + `TTL` in a transactional pipeline
+- In-memory implementation: process-local deque window tracking
+
+Redis key shape is namespaced and hashed before storage. Raw email addresses, tenant slugs, user IDs, agent IDs, or tokens are not stored as plaintext Redis keys.
 
 ## Keying model
 
@@ -37,9 +60,9 @@ Rate-limit keys use combinations of:
 - client IP
 - tenant ID or tenant slug when available
 - user ID or agent ID when available
-- endpoint-specific identifiers such as export config ID
+- endpoint-specific identifiers such as export config ID, job ID, or integrity action
 
-The combined key is hashed before storage in the in-memory limiter.
+The combined key is normalized and hashed before storage in either provider.
 
 ## Tuning
 
@@ -58,6 +81,10 @@ Environment variables:
 - `AGENTGATE_RATE_LIMIT_AUDIT_EXPORT_WINDOW_SECONDS`
 - `AGENTGATE_RATE_LIMIT_RETENTION_LIMIT`
 - `AGENTGATE_RATE_LIMIT_RETENTION_WINDOW_SECONDS`
+- `AGENTGATE_RATE_LIMIT_JOBS_RETRY_LIMIT`
+- `AGENTGATE_RATE_LIMIT_JOBS_RETRY_WINDOW_SECONDS`
+- `AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_LIMIT`
+- `AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_WINDOW_SECONDS`
 
 ## Response shape
 
@@ -71,9 +98,26 @@ When throttled, AgentGate returns:
 
 For authenticated privileged endpoints, serious throttling is also written as a tenant-scoped audit event.
 
-## Current limitations
+## Redis failure behavior
 
-- no shared limiter across multiple API replicas yet
-- no Redis backend yet
-- no proxy-aware client IP trust model yet
+- default behavior is fail-closed on backend errors for protected scopes
+- if the Redis-backed limiter cannot be reached, protected endpoints return a safe `503 rate_limiter_unavailable`
+- `GET /ready` reports Redis-backed limiter health without exposing the Redis URL or credentials
+- `AGENTGATE_RATE_LIMIT_FAIL_OPEN_ON_BACKEND_ERROR=true` exists as an escape hatch, but it should only be used deliberately in low-risk or isolated environments
+
+## Metrics
+
+`GET /metrics` includes safe aggregate limiter metrics:
+
+- `agentgate_rate_limit_requests_total{provider,scope,outcome}`
+- `agentgate_rate_limit_backend_errors_total{provider,scope}`
+- `agentgate_rate_limit_exceeded_total{provider,scope}`
+
+No limiter keys, tenant IDs, user IDs, raw IPs, or secret material are exposed.
+
+## Limitations
+
+- the Redis implementation is fixed-window, not sliding-window or token-bucket
+- client IP handling is not yet proxy-trust-aware
+- the built-in implementation assumes a single Redis endpoint and does not yet include Sentinel or Cluster-specific behavior
 - no per-API-key custom policy yet

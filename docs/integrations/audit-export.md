@@ -12,7 +12,7 @@ Supported destination types in this build:
 - `datadog`
 - `custom_placeholder`
 
-The current goal is a safe export foundation, not a full SIEM product. Export is durable, tenant-scoped, and sanitized, but it is not yet an immutable archival pipeline.
+The current goal is a safe export foundation, not a full SIEM product. Export is durable, tenant-scoped, sanitized, and can preserve safe audit-integrity metadata, but it is not yet an immutable archival pipeline.
 
 ## What gets exported
 
@@ -23,6 +23,7 @@ Each exported event contains:
 - Event type
 - Sanitized metadata
 - Inferred severity
+- Safe audit-integrity metadata such as `event_hash`, `previous_event_hash`, `sequence_number`, and `hash_algorithm`
 - IP address if it was already present on the audit event
 - Creation timestamp
 
@@ -36,6 +37,7 @@ AgentGate does not export:
 - Slack bot tokens
 
 Audit metadata is sanitized when written and sanitized again during export.
+Integrity metadata is derived from canonical sanitized audit-event content, not from raw secrets or decrypted payloads.
 
 ## Configuration model
 
@@ -176,6 +178,7 @@ It does not show raw tokens, secret refs, or destination secrets.
 - Start with low `max_batch_size` values while validating downstream parsing.
 - Monitor `failed` and `retry_exhausted` export jobs.
 - Keep downstream SIEM retention and RBAC aligned with the sensitivity of audit data, even though AgentGate exports sanitized views only.
+- Preserve integrity metadata downstream if you want later verification or checkpointing workflows outside AgentGate.
 - If you use worker mode, run at least one dedicated worker process.
 - Schedule export runs externally until AgentGate gains a built-in recurring scheduler.
 
@@ -183,6 +186,6 @@ It does not show raw tokens, secret refs, or destination secrets.
 
 - There is no built-in recurring scheduler yet.
 - There is no destination verification handshake or signed webhook flow yet.
-- There is no dead-letter queue or immutable archival guarantee yet.
+- There is no dead-letter queue or external immutable archival guarantee yet.
 - Severity filters are inferred at export time rather than stored as a first-class audit-event column.
 - `custom_placeholder` is an extension point, not a specialized adapter.

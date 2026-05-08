@@ -8,6 +8,7 @@ AgentGate now ships a lightweight observability baseline:
 - request IDs on responses and error bodies
 - safe readiness checks
 - aggregate metrics at `GET /metrics`
+- a starter Prometheus, Grafana, and alert-rules package under `observability/`
 
 This is intentionally a foundation, not a full metrics, tracing, and alerting stack.
 
@@ -39,6 +40,7 @@ They do not log:
   - job backend/config summary
   - key-provider summary
   - safe integration/config summary
+  - rate-limiter provider summary and Redis connectivity when configured
 
 ## Metrics
 
@@ -51,25 +53,45 @@ Current metrics include:
 - approval lifecycle totals
 - job transition totals
 - current job counts by status
+- current dead-letter job counts
+- active worker counts by effective status
+- job lease expiration totals
+- stale job recovery totals
+- retry totals by job type and trigger
 - audit export outcomes
 - Slack notification outcomes
 - retention purge totals
 - OIDC login success and failure
-- rate-limit rejections
+- rate-limit allow and block totals by provider and scope
+- rate-limit backend error totals by provider and scope
 
 Metrics avoid tenant labels, user labels, raw payload values, and secret material.
+
+See `docs/operations/observability-package.md` for the starter Prometheus scrape file, example alert rules, and Grafana dashboard JSON that match the current metric surface.
 
 ## Recommended usage
 
 - scrape `/metrics` from an internal network path
 - treat `/ready` as the deployment readiness signal
 - propagate `X-Request-ID` from ingress if you already have one
-- alert on repeated `rate_limited`, `database_error`, `job_failed`, `retry_exhausted`, and retention purge failures
+- use `scripts/validate-deployment.py` after startup or upgrade to combine readiness checks with real operator login and safe control-plane API reachability
+- alert on repeated `rate_limited`, `database_error`, `job_failed`, `retry_exhausted`, lease-expiration spikes, stale recovery spikes, and retention purge failures
+- alert on `rate_limiter_unavailable` if Redis-backed rate limiting is required for the environment
+
+## Load testing complement
+
+AgentGate also includes a lightweight k6 regression suite under `load-tests/k6/`.
+
+- use it to exercise `/health`, `/ready`, login, gateway paths, jobs, audit integrity, and opt-in rate-limited behavior
+- treat it as a regression signal, not a production benchmark
+- keep using `/metrics` and `/ready` alongside k6 results so latency regressions and operational state can be interpreted together
+
+See `docs/operations/load-testing.md` for setup and commands.
 
 ## Current gaps
 
 - no built-in distributed tracing
 - no OpenTelemetry export
-- no alert rules or dashboards in-repo
+- no managed Prometheus, Grafana, or alert-routing deployment in-repo
 - no long-term metrics backend configuration in this repo
-- no worker liveness heartbeat yet
+- no true worker-heartbeat timestamp metric yet; the current package uses worker-count and stale-recovery signals instead

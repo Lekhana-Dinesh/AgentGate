@@ -39,7 +39,9 @@ Context-sensitive content fields can also be protected, including:
 
 ## Envelope Format
 
-Protected fields are stored as identifiable envelopes:
+Protected fields are stored as identifiable envelopes.
+
+Env-backed example:
 
 ```json
 {
@@ -54,7 +56,28 @@ Protected fields are stored as identifiable envelopes:
 }
 ```
 
-These envelopes are internal storage details. Public APIs and UI views do not return them directly.
+AWS KMS-backed example:
+
+```json
+{
+  "__agentgate_encrypted__": true,
+  "alg": "local-fernet-v1",
+  "algorithm": "local-fernet-v1",
+  "ciphertext": "...",
+  "key_ref": "payload-kms-2026-05",
+  "key_version": "2026-05",
+  "provider": "aws_kms",
+  "encrypted_data_key": "...",
+  "encrypted_data_key_algorithm": "aws-kms-generate-data-key",
+  "created_at": "2026-05-03T12:34:56Z"
+}
+```
+
+Notes:
+
+- public APIs and UI views do not return these envelopes directly
+- AWS KMS envelopes store wrapped data keys, not plaintext data keys
+- legacy env-backed envelopes still decrypt by `key_ref`
 
 ## What API and UI Consumers See
 
@@ -78,18 +101,22 @@ Only trusted backend execution paths decrypt protected fields:
 
 If a protected payload is corrupted or cannot be decrypted, execution fails closed with `protected_payload_invalid`.
 
+If the protected execution payload was already purged by retention, approved execution fails closed with `protected_payload_purged`.
+
 ## Configuration
+
+### Local env provider
 
 Set a Fernet key with:
 
 ```bash
+AGENTGATE_KEY_PROVIDER=env
 AGENTGATE_PAYLOAD_ENCRYPTION_KEY=your-generated-fernet-key
 ```
 
 Optional explicit secret-reference wiring:
 
 ```bash
-AGENTGATE_KEY_PROVIDER=env
 AGENTGATE_PAYLOAD_ENCRYPTION_KEY_SECRET_REF=env:AGENTGATE_PAYLOAD_ENCRYPTION_KEY
 AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF=payload-primary
 AGENTGATE_PAYLOAD_ENCRYPTION_KEY_VERSION=2026-05
@@ -101,7 +128,25 @@ Optional decrypt-only rotation scaffolding:
 AGENTGATE_PAYLOAD_ENCRYPTION_ADDITIONAL_KEYS='{"configured-env":"env:AGENTGATE_PAYLOAD_ENCRYPTION_KEY_PREVIOUS"}'
 ```
 
-You can generate one with:
+### AWS KMS provider
+
+For production-minded deployments:
+
+```bash
+AGENTGATE_KEY_PROVIDER=aws_kms
+AGENTGATE_AWS_REGION=us-east-1
+AGENTGATE_AWS_KMS_KEY_ID=alias/agentgate/payload
+AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF=payload-kms-2026-05
+AGENTGATE_PAYLOAD_ENCRYPTION_KEY_VERSION=2026-05
+```
+
+Optional LocalStack/testing path:
+
+```bash
+AGENTGATE_AWS_KMS_ENDPOINT_URL=http://localhost:4566
+```
+
+You can generate a Fernet key for local env-provider use with:
 
 ```bash
 python - <<'PY'
@@ -112,8 +157,9 @@ PY
 
 Behavior by environment:
 
-- `development` and `test`: if the key is unset, AgentGate uses a deterministic local fallback key so local setup and tests still work
-- non-development environments: the key is required and startup fails if it is missing
+- `development` and `test`: if the env-provider key is unset, AgentGate uses a deterministic local fallback key so local setup and tests still work
+- non-development environments with `AGENTGATE_KEY_PROVIDER=env`: a valid Fernet key or resolvable env reference is required and startup fails if it is missing
+- non-development environments with `AGENTGATE_KEY_PROVIDER=aws_kms`: `AGENTGATE_AWS_REGION` and `AGENTGATE_AWS_KMS_KEY_ID` are required, and readiness fails closed if the configured KMS key is unavailable
 
 ## Retention Foundation
 
@@ -134,15 +180,16 @@ Current behavior:
 
 ## Current Limitations
 
-- Encryption is environment-scoped, not tenant-scoped
-- There is no cloud KMS-backed provider implementation yet
-- There is no automatic re-encryption or rewrap workflow yet
-- Trace and audit metadata are sanitized, not encrypted, because they are not part of the execution replay path
-- The development/test fallback key is intentionally only a local convenience
+- encryption is environment-scoped, not tenant-scoped
+- AWS KMS is the only cloud-backed provider implemented today
+- there is no automatic re-encryption or rewrap workflow yet
+- trace and audit metadata are sanitized, not encrypted, because they are not part of the execution replay path
+- the development/test fallback key is intentionally only a local convenience
 
 ## Production Hardening Path
 
-- Replace the env key provider with AWS KMS, GCP KMS, Azure Key Vault, or Vault-backed providers
-- Add a manual or queue-backed ciphertext rewrap workflow once key rotation procedures are operationally tested
-- Add tenant-level retention policy configuration
-- Add stronger per-connector data minimization so fewer raw values ever need to be replayable
+- prefer `AGENTGATE_KEY_PROVIDER=aws_kms` with tightly scoped IAM for shared deployments
+- keep old env decrypt-only refs in `AGENTGATE_PAYLOAD_ENCRYPTION_ADDITIONAL_KEYS` during migration until historical ciphertext is retired
+- add a manual or queue-backed ciphertext rewrap workflow once key rotation procedures are operationally tested
+- add tenant-level key hierarchies and broader cloud/Vault providers as future hardening steps
+- add stronger per-connector data minimization so fewer raw values ever need to be replayable

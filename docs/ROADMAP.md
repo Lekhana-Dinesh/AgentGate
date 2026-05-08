@@ -2,28 +2,28 @@
 
 ## Near Term
 
-- Add real connector adapters for REST, MCP, and internal APIs
+- Expand governed connector coverage beyond the current GitHub, Jira, and MCP foundations
+- Add safer browser-side CRUD for connector and identity configuration that still relies on docs or APIs today
 - Add API key lifecycle management views in the UI
 - Add richer trace summaries and decision drill-downs
-- Improve audit event filtering and export
-- Add pagination and cursor-based API responses
-- Improve policy authoring UX with structured rule builders
+- Improve audit event filtering and export ergonomics
+- Improve pagination, cursor-based API responses, and policy authoring UX with structured rule builders
 
 ## Security Hardening
 
-- OIDC, SAML, and SCIM integrations
-- Managed secret storage and KMS-backed encryption
-- Immutable or externalized audit storage
-- Webhook and queue-backed approval notifications
-- Rate limiting and abuse throttling middleware
+- SAML support and broader SCIM coverage such as Groups, richer filters, role sync, and managed token lifecycle
+- Broader external secret-manager support and cloud KMS coverage beyond the current env-backed and AWS KMS foundations
+- Stronger immutable-evidence options beyond the current external checkpointing foundation
+- Richer approval-notification options beyond the current outbound Slack and job-backed foundation
+- Proxy-aware client IP trust and richer abuse throttling policy
 - Stronger API key rotation and expiry policies
 
 ## Platform Scale
 
-- Async execution workers
-- Redis-backed job orchestration
+- Lease renewal, leader election, and stronger distributed orchestration beyond the current worker and scheduler foundations
+- Deeper observability, tracing, and alerting beyond the current starter metrics, dashboards, and alert rules
 - Postgres query optimization and indexing reviews
-- Background retention and archival jobs
+- Deployment patterns beyond the current Compose-based self-hosted profile
 - Multi-region deployment patterns
 
 ## Decision Intelligence
@@ -32,4 +32,3 @@
 - Policy simulation and dry-run evaluation
 - Risk model calibration with historical feedback
 - Reviewer feedback loops for policy tuning
-

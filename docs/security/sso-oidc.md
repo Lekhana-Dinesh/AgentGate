@@ -7,6 +7,7 @@ AgentGate now supports a production-minded OIDC foundation alongside the existin
 - Local auth remains enabled and is still the default for development and bootstrap workflows.
 - OIDC is optional and tenant-scoped.
 - Successful OIDC login ends in the same AgentGate JWT model used by the rest of the application.
+- OIDC-created or OIDC-bound users are marked with `provisioned_source=oidc` for downstream lifecycle and audit handling.
 
 ## Tenant OIDC configuration
 
@@ -42,6 +43,8 @@ Current build behavior:
 5. AgentGate validates state, tenant binding, issuer/audience via the provider abstraction, allowed email domain, and role mapping inputs.
 6. AgentGate provisions or updates the tenant user and issues a short-lived exchange ticket.
 7. Frontend redeems the exchange ticket at `POST /v1/auth/oidc/exchange` to receive the normal AgentGate JWT.
+
+If a tenant user has already been deactivated through the lifecycle APIs, the OIDC callback or exchange flow fails closed instead of reactivating or re-privileging that account implicitly.
 
 ## Role mapping
 
@@ -87,6 +90,7 @@ Behavior:
 - If you want config shape parity with a future secret-manager deployment, use `client_secret_ref=env:...` rather than storing the secret itself.
 - Keep local auth available only as long as your operational model requires it.
 - Review role mappings carefully before assigning any privileged roles from broad enterprise groups.
+- Treat OIDC role mapping as role resolution only, not as an automatic reactivation path for deactivated accounts.
 - Audit `auth.oidc.login.failed` events and investigate repeated domain, state, or token validation failures.
 - Prefer HTTPS origins for both API and app before enabling production SSO.
 
@@ -95,5 +99,5 @@ Behavior:
 - Local auth is still present; this is a dual-mode auth model, not a local-auth removal.
 - There is no tenant-admin API/UI yet for managing OIDC configs.
 - `client_secret_ref` is modeled and env references work, but real external secret-manager adapters are still not implemented in this build.
-- There is no SAML, SCIM, or IdP metadata sync yet.
+- There is no SAML, broad SCIM identity-governance coverage, or IdP metadata sync yet.
 - The current login route shape effectively assumes one practical active provider path per tenant entrypoint.
