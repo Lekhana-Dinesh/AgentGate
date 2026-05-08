@@ -16,6 +16,12 @@ class JobSummary(ORMModel):
     attempts: int
     max_attempts: int
     last_error: str | None
+    locked_by: str | None
+    locked_at: datetime | None
+    lease_expires_at: datetime | None
+    dead_letter_reason: str | None
+    dead_lettered: bool
+    can_retry: bool
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
@@ -34,6 +40,17 @@ class ApprovalExecutionStatus(BaseModel):
     message: str | None = None
 
 
+def _manual_retry_supported(job_type: JobType) -> bool:
+    return job_type in {
+        JobType.APPROVAL_NOTIFICATION_SLACK,
+        JobType.AUDIT_EXPORT_PLACEHOLDER,
+        JobType.AUDIT_INTEGRITY_CHECKPOINT_PLACEHOLDER,
+        JobType.RETENTION_PURGE_PLACEHOLDER,
+        JobType.AUDIT_INTEGRITY_VERIFY_PLACEHOLDER,
+        JobType.CONNECTOR_HEALTH_CHECK_PLACEHOLDER,
+    }
+
+
 def serialize_job(job) -> JobResponse:
     payload_service = PayloadService()
     return JobResponse(
@@ -47,6 +64,15 @@ def serialize_job(job) -> JobResponse:
         max_attempts=job.max_attempts,
         next_run_at=job.next_run_at,
         last_error=job.last_error,
+        locked_by=job.locked_by,
+        locked_at=job.locked_at,
+        lease_expires_at=job.lease_expires_at,
+        dead_letter_reason=job.dead_letter_reason,
+        dead_lettered=bool(job.dead_letter_reason),
+        can_retry=(
+            job.status in {JobStatus.FAILED, JobStatus.RETRY_EXHAUSTED}
+            and _manual_retry_supported(job.job_type)
+        ),
         created_at=job.created_at,
         updated_at=job.updated_at,
         completed_at=job.completed_at,
@@ -61,6 +87,15 @@ def serialize_job_summary(job) -> JobSummary:
         attempts=job.attempts,
         max_attempts=job.max_attempts,
         last_error=job.last_error,
+        locked_by=job.locked_by,
+        locked_at=job.locked_at,
+        lease_expires_at=job.lease_expires_at,
+        dead_letter_reason=job.dead_letter_reason,
+        dead_lettered=bool(job.dead_letter_reason),
+        can_retry=(
+            job.status in {JobStatus.FAILED, JobStatus.RETRY_EXHAUSTED}
+            and _manual_retry_supported(job.job_type)
+        ),
         created_at=job.created_at,
         updated_at=job.updated_at,
         completed_at=job.completed_at,

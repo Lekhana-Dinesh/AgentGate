@@ -44,6 +44,14 @@ def _assert_agent_write_access(current_user: User, agent: Agent | None = None, o
     raise AppError("You do not have write access to this agent.", status_code=403, code="agent_access_forbidden")
 
 
+def _assert_agent_api_key_read_access(current_user: User, agent: Agent) -> None:
+    if current_user.role in {UserRole.OWNER, UserRole.ADMIN, UserRole.SECURITY_REVIEWER}:
+        return
+    if current_user.role == UserRole.DEVELOPER and agent.owner_user_id == current_user.id:
+        return
+    raise AppError("You do not have access to this agent's API keys.", status_code=403, code="agent_key_access_forbidden")
+
+
 @router.get("", response_model=list[AgentResponse])
 def list_agents(
     environment: AgentEnvironment | None = Query(default=None),
@@ -254,13 +262,13 @@ def create_agent_api_key(
 @router.get("/{agent_id}/api-keys", response_model=list[AgentAPIKeySummary])
 def list_agent_api_keys(
     agent_id: str,
-    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.DEVELOPER)),
+    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.SECURITY_REVIEWER, UserRole.DEVELOPER)),
     db: Session = Depends(get_db),
 ) -> list[AgentAPIKeySummary]:
     agent = db.scalar(select(Agent).where(Agent.id == agent_id, Agent.tenant_id == current_user.tenant_id))
     if not agent:
         raise AppError("Agent not found.", status_code=404, code="agent_not_found")
-    _assert_agent_write_access(current_user, agent=agent)
+    _assert_agent_api_key_read_access(current_user, agent)
     api_keys = list(
         db.scalars(
             select(AgentAPIKey)

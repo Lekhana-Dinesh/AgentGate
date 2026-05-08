@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.enums import UserRole
-from app.schemas.common import ORMModel
+from app.schemas.user import UserResponse
 
 
 class BootstrapOwnerRequest(BaseModel):
@@ -23,8 +21,20 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    access_token: str | None = None
     token_type: str = "bearer"
+    session_mode: str = "token"
+    csrf_token: str | None = None
+
+
+class CSRFTokenResponse(BaseModel):
+    csrf_token: str | None = None
+    header_name: str = "X-CSRF-Token"
+    session_mode: str = "token"
+
+
+class LogoutResponse(BaseModel):
+    logged_out: bool = True
 
 
 class OIDCExchangeRequest(BaseModel):
@@ -40,15 +50,8 @@ class OIDCConfigStatusResponse(BaseModel):
     reason: str | None = None
 
 
-class CurrentUserResponse(ORMModel):
-    id: str
-    tenant_id: str
-    email: str
-    full_name: str
-    role: UserRole
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
+class CurrentUserResponse(UserResponse):
+    pass
 
 
 class CreateUserRequest(BaseModel):

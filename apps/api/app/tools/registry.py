@@ -3,12 +3,14 @@ from __future__ import annotations
 from app.core.errors import AppError
 from app.tools.base import ToolExecutionAdapter, ToolExecutionRequest
 from app.tools.github_adapter import GitHubToolAdapter
+from app.tools.jira_adapter import JiraToolAdapter
+from app.tools.mcp_adapter import MCPToolAdapter
 from app.tools.mock_adapter import MockToolAdapter
 
 
 class ToolAdapterRegistry:
     def __init__(self, adapters: list[ToolExecutionAdapter] | None = None) -> None:
-        self.adapters = adapters or [MockToolAdapter(), GitHubToolAdapter()]
+        self.adapters = adapters or [MockToolAdapter(), GitHubToolAdapter(), JiraToolAdapter(), MCPToolAdapter()]
 
     def supports(self, request: ToolExecutionRequest) -> bool:
         return any(adapter.supports(request) for adapter in self.adapters)

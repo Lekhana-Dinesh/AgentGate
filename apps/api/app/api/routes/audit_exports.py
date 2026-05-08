@@ -43,7 +43,6 @@ def create_audit_export_config(
         require_roles(
             UserRole.OWNER,
             UserRole.ADMIN,
-            UserRole.SECURITY_REVIEWER,
         )
     ),
     db: Session = Depends(get_db),
@@ -70,7 +69,6 @@ def update_audit_export_config(
         require_roles(
             UserRole.OWNER,
             UserRole.ADMIN,
-            UserRole.SECURITY_REVIEWER,
         )
     ),
     db: Session = Depends(get_db),
@@ -99,7 +97,6 @@ def run_audit_export(
         require_roles(
             UserRole.OWNER,
             UserRole.ADMIN,
-            UserRole.SECURITY_REVIEWER,
         )
     ),
     db: Session = Depends(get_db),

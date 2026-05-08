@@ -109,30 +109,39 @@ class RetentionService:
         db: Session,
         *,
         tenant_id: str,
-        requested_by: User,
+        requested_by: User | None,
         dry_run: bool,
         filters: RetentionPurgeFilters,
         ip_address: str | None,
+        actor_type: AuditActorType | None = None,
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+        source: str = "manual",
+        scheduled_task_id: str | None = None,
     ) -> Job:
+        effective_actor_type = actor_type or (AuditActorType.USER if requested_by else AuditActorType.SYSTEM)
+        effective_actor_id = actor_id or (requested_by.id if requested_by else None)
         job = self.job_service.enqueue(
             db,
             tenant_id=tenant_id,
             job_type=JobType.RETENTION_PURGE_PLACEHOLDER,
-            idempotency_key=f"retention_purge.placeholder:{tenant_id}:{uuid4()}",
+            idempotency_key=idempotency_key or f"retention_purge.placeholder:{tenant_id}:{uuid4()}",
             payload={
                 "dry_run": dry_run,
                 "filters": filters.to_payload(),
-                "requested_by_user_id": requested_by.id,
-                "requested_by_role": requested_by.role.value,
+                "requested_by_user_id": requested_by.id if requested_by else None,
+                "requested_by_role": requested_by.role.value if requested_by else None,
                 "ip_address": ip_address,
+                "source": source,
+                "scheduled_task_id": scheduled_task_id,
             },
             max_attempts=max(1, get_settings().job_retention_max_attempts),
         )
         self.audit_service.create_event(
             db,
             tenant_id=tenant_id,
-            actor_type=AuditActorType.USER,
-            actor_id=requested_by.id,
+            actor_type=effective_actor_type,
+            actor_id=effective_actor_id,
             event_type=RETENTION_PURGE_QUEUED_EVENT,
             resource_type="job",
             resource_id=job.id,
@@ -140,10 +149,20 @@ class RetentionService:
                 "dry_run": dry_run,
                 "job_id": job.id,
                 "filters": filters.to_payload(),
+                "source": source,
+                "scheduled_task_id": scheduled_task_id,
             },
             ip_address=ip_address,
         )
         return job
+
+    def build_filters_from_scheduled_config(self, config) -> RetentionPurgeFilters:
+        return RetentionPurgeFilters(
+            retention_classes=[item.value if hasattr(item, "value") else str(item) for item in config.retention_classes],
+            tool_name=config.tool_name,
+            tool_call_ids=list(config.tool_call_ids),
+            limit=config.limit,
+        )
 
     def get_status_summary(
         self,

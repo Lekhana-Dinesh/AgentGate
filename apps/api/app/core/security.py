@@ -43,6 +43,14 @@ class OIDCExchangeTicketPayload:
     exp: int
 
 
+@dataclass(slots=True)
+class CSRFTokenPayload:
+    sub: str
+    tenant_id: str
+    session_fingerprint: str
+    exp: int
+
+
 def hash_password(password: str) -> str:
     return password_hasher.hash(password)
 
@@ -147,6 +155,42 @@ def decode_access_token(token: str) -> TokenPayload:
     )
 
 
+def create_csrf_token(*, session_token: str) -> str:
+    session_payload = decode_access_token(session_token)
+    payload = {
+        "purpose": "csrf",
+        "sub": session_payload.sub,
+        "tenant_id": session_payload.tenant_id,
+        "session_fingerprint": _token_fingerprint(session_token),
+        "exp": datetime.fromtimestamp(session_payload.exp, tz=timezone.utc),
+    }
+    return jwt.encode(payload, get_settings().secret_key, algorithm="HS256")
+
+
+def decode_csrf_token(token: str, *, session_token: str) -> CSRFTokenPayload:
+    payload = _decode_signed_token(
+        token,
+        expected_purpose="csrf",
+        error_code="csrf_invalid",
+        detail="CSRF token validation failed.",
+        status_code=403,
+    )
+    session_payload = decode_access_token(session_token)
+    session_fingerprint = _token_fingerprint(session_token)
+    if (
+        payload["sub"] != session_payload.sub
+        or payload["tenant_id"] != session_payload.tenant_id
+        or payload["session_fingerprint"] != session_fingerprint
+    ):
+        raise AppError("CSRF token validation failed.", status_code=403, code="csrf_invalid")
+    return CSRFTokenPayload(
+        sub=payload["sub"],
+        tenant_id=payload["tenant_id"],
+        session_fingerprint=payload["session_fingerprint"],
+        exp=payload["exp"],
+    )
+
+
 def generate_api_key() -> tuple[str, str, str]:
     raw_secret = secrets.token_urlsafe(32)
     prefix = f"agk_{raw_secret[:8]}"
@@ -160,18 +204,23 @@ def verify_api_key(raw_key: str, hashed_key: str) -> bool:
     return hmac.compare_digest(candidate, hashed_key)
 
 
+def _token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def _decode_signed_token(
     token: str,
     *,
     expected_purpose: str | None,
     error_code: str,
     detail: str,
+    status_code: int = 401,
 ) -> dict[str, Any]:
     settings = get_settings()
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
     except jwt.PyJWTError as exc:
-        raise AppError(detail, status_code=401, code=error_code) from exc
+        raise AppError(detail, status_code=status_code, code=error_code) from exc
     if expected_purpose and payload.get("purpose") != expected_purpose:
-        raise AppError(detail, status_code=401, code=error_code)
+        raise AppError(detail, status_code=status_code, code=error_code)
     return payload

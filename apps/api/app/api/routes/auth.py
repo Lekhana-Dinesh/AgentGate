@@ -1,25 +1,33 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Cookie, Depends, Request, status
+from fastapi import APIRouter, Cookie, Depends, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
-from app.core.enums import AuditActorType
-from app.core.enums import UserRole
-from app.core.errors import AppError
 from app.core.config import get_settings
+from app.core.enums import AuditActorType, UserRole
+from app.core.errors import AppError
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.schemas.auth import (
     BootstrapOwnerRequest,
+    CSRFTokenResponse,
     CreateUserRequest,
-    CurrentUserResponse,
     LoginRequest,
+    LogoutResponse,
     OIDCConfigStatusResponse,
     OIDCExchangeRequest,
     TokenResponse,
 )
+from app.security.browser_sessions import (
+    AUTH_SESSION_MODE_COOKIE,
+    clear_session_cookies,
+    get_session_cookie_token,
+    issue_session_cookies,
+    is_cookie_session_mode,
+)
+from app.schemas.user import UserResponse
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthService
 from app.services.oidc_service import OIDC_STATE_COOKIE, OIDCService, build_oidc_frontend_redirect
@@ -31,19 +39,36 @@ audit_service = AuditService()
 oidc_service = OIDCService()
 
 
-def _cookie_secure() -> bool:
+def _oidc_cookie_secure() -> bool:
     settings = get_settings()
-    return settings.public_api_url.startswith("https://") or settings.public_app_url.startswith("https://")
+    return (
+        settings.cookie_secure
+        or settings.public_api_url.startswith("https://")
+        or settings.public_app_url.startswith("https://")
+    )
+
+
+def _build_auth_response(response: Response, *, access_token: str) -> TokenResponse:
+    if is_cookie_session_mode():
+        csrf_token = issue_session_cookies(response, access_token=access_token)
+        return TokenResponse(
+            access_token=None,
+            token_type="bearer",
+            session_mode=AUTH_SESSION_MODE_COOKIE,
+            csrf_token=csrf_token,
+        )
+    return TokenResponse(access_token=access_token, token_type="bearer", session_mode="token")
 
 
 @router.post("/bootstrap", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def bootstrap_owner(
     payload: BootstrapOwnerRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
-    token = auth_service.bootstrap_owner(db, payload)
-    token_payload = decode_access_token(token.access_token)
+    access_token = auth_service.bootstrap_owner(db, payload)
+    token_payload = decode_access_token(access_token)
     request.state.tenant_id = token_payload.tenant_id
     request.state.user_id = token_payload.sub
     audit_service.create_event(
@@ -57,11 +82,16 @@ def bootstrap_owner(
         metadata={"email": payload.email.lower()},
     )
     db.commit()
-    return token
+    return _build_auth_response(response, access_token=access_token)
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> TokenResponse:
     get_rate_limiter().enforce(
         scope="login",
         key_parts=[
@@ -71,8 +101,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         ],
         settings=get_rate_limit_settings("login"),
     )
-    token = auth_service.login(db, payload)
-    token_payload = decode_access_token(token.access_token)
+    access_token = auth_service.login(db, payload)
+    token_payload = decode_access_token(access_token)
     request.state.tenant_id = token_payload.tenant_id
     request.state.user_id = token_payload.sub
     audit_service.create_event(
@@ -86,7 +116,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         metadata={"tenant_slug": payload.tenant_slug},
     )
     db.commit()
-    return token
+    return _build_auth_response(response, access_token=access_token)
 
 
 @router.get("/oidc/{tenant_slug}/config-status", response_model=OIDCConfigStatusResponse)
@@ -116,7 +146,7 @@ def oidc_login(
             OIDC_STATE_COOKIE,
             initiation.state_token,
             httponly=True,
-            secure=_cookie_secure(),
+            secure=_oidc_cookie_secure(),
             samesite="lax",
             path="/v1/auth/oidc",
         )
@@ -170,6 +200,7 @@ def oidc_callback(
 def exchange_oidc_ticket(
     payload: OIDCExchangeRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     get_rate_limiter().enforce(
@@ -185,20 +216,45 @@ def exchange_oidc_ticket(
     token_payload = decode_access_token(access_token)
     request.state.tenant_id = token_payload.tenant_id
     request.state.user_id = token_payload.sub
-    return TokenResponse(access_token=access_token)
+    return _build_auth_response(response, access_token=access_token)
 
 
-@router.get("/me", response_model=CurrentUserResponse)
-def me(user=Depends(get_current_user)) -> CurrentUserResponse:
-    return CurrentUserResponse.model_validate(user)
+@router.get("/me", response_model=UserResponse)
+def me(user=Depends(get_current_user)) -> UserResponse:
+    return UserResponse.model_validate(user)
 
 
-@router.post("/users", response_model=CurrentUserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/logout", response_model=LogoutResponse)
+def logout(response: Response) -> LogoutResponse:
+    clear_session_cookies(response)
+    return LogoutResponse()
+
+
+@router.get("/csrf-token", response_model=CSRFTokenResponse)
+def get_csrf_token(
+    request: Request,
+    response: Response,
+    user=Depends(get_current_user),
+) -> CSRFTokenResponse:
+    if not is_cookie_session_mode():
+        return CSRFTokenResponse(session_mode="token")
+    session_token = get_session_cookie_token(request)
+    if not session_token:
+        raise AppError("Cookie session mode is not active for this request.", status_code=400, code="cookie_session_required")
+    del user
+    csrf_token = issue_session_cookies(response, access_token=session_token)
+    return CSRFTokenResponse(
+        csrf_token=csrf_token,
+        session_mode=AUTH_SESSION_MODE_COOKIE,
+    )
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: CreateUserRequest,
     current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
     db: Session = Depends(get_db),
-) -> CurrentUserResponse:
+) -> UserResponse:
     if payload.role == UserRole.OWNER and current_user.role != UserRole.OWNER:
         raise AppError(
             "Only tenant owners can create another owner account.",
@@ -217,4 +273,4 @@ def create_user(
         metadata={"created_role": user.role.value},
     )
     db.commit()
-    return CurrentUserResponse.model_validate(user)
+    return UserResponse.model_validate(user)

@@ -42,8 +42,8 @@ def seed() -> None:
             db.flush()
 
         users = {
-            "admin@demo.agentgate.local": ("Demo Admin", UserRole.ADMIN),
-            "reviewer@demo.agentgate.local": ("Demo Reviewer", UserRole.SECURITY_REVIEWER),
+            "admin@demo.agentgate.example.com": ("Demo Admin", UserRole.ADMIN),
+            "reviewer@demo.agentgate.example.com": ("Demo Reviewer", UserRole.SECURITY_REVIEWER),
         }
         created_users: dict[str, User] = {}
         for email, (full_name, role) in users.items():
@@ -67,24 +67,25 @@ def seed() -> None:
                 tenant_id=tenant.id,
                 name="SalesProposalAgent",
                 description="Prepares renewal proposals using CRM, pricing, and outbound comms tools.",
-                owner_user_id=created_users["admin@demo.agentgate.local"].id,
+                owner_user_id=created_users["admin@demo.agentgate.example.com"].id,
                 environment=AgentEnvironment.PRODUCTION,
                 status=AgentStatus.ACTIVE,
                 purpose="Prepare and coordinate customer renewal proposals under runtime policy control.",
-                allowed_tools=["Salesforce", "PricingDB", "Email", "Jira", "Postgres", "GitHub"],
-                allowed_data_classes=["customer_data", "internal_pricing", "financial", "confidential"],
+                allowed_tools=["Salesforce", "PricingDB", "Email", "Jira", "MCP", "Postgres", "GitHub"],
+                allowed_data_classes=["customer_data", "internal_pricing", "financial", "confidential", "customer_visible", "external_project"],
                 risk_level=RiskBand.HIGH,
             )
             db.add(agent)
             db.flush()
-        elif "GitHub" not in (agent.allowed_tools or []):
-            agent.allowed_tools = sorted({*(agent.allowed_tools or []), "GitHub"})
+        else:
+            agent.allowed_tools = sorted({*(agent.allowed_tools or []), "GitHub", "MCP", "Jira"})
 
         tools = [
             ("Salesforce", ToolType.CRM, "Mock CRM account reader.", None, {"mock": True}, RiskBand.MEDIUM),
             ("PricingDB", ToolType.DATABASE, "Mock pricing database reader and discount simulator.", None, {"mock": True}, RiskBand.HIGH),
             ("Email", ToolType.EMAIL, "Mock outbound email sender.", None, {"mock": True}, RiskBand.HIGH),
-            ("Jira", ToolType.CUSTOM, "Mock Jira ticket creation adapter.", None, {"mock": True}, RiskBand.LOW),
+            ("Jira", ToolType.JIRA, "Mock Jira ticket creation adapter.", "https://jira.example.test", {"mock": True}, RiskBand.LOW),
+            ("MCP", ToolType.MCP, "Mock governed MCP adapter.", "https://mcp.example.test", {"mock": True}, RiskBand.HIGH),
             ("Postgres", ToolType.DATABASE, "Mock production database query and export adapter.", None, {"mock": True}, RiskBand.CRITICAL),
             (
                 "GitHub",
@@ -231,6 +232,95 @@ def seed() -> None:
                     ]
                 ),
             ),
+            (
+                "Require approval for Jira production transitions",
+                "Routes Jira workflow transitions for production agents through human review.",
+                PolicySeverity.HIGH,
+                PolicyDecision.REQUIRE_APPROVAL,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                        {"field": "action_name", "operator": "contains", "value": "transition"},
+                        {"field": "environment", "operator": "equals", "value": "production"},
+                    ]
+                ),
+            ),
+            (
+                "Require approval for Jira customer visible comments",
+                "Routes customer-visible Jira comments through human review.",
+                PolicySeverity.HIGH,
+                PolicyDecision.REQUIRE_APPROVAL,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                        {"field": "action_name", "operator": "contains", "value": "comment"},
+                        {"field": "data_classification", "operator": "contains", "value": "customer_visible"},
+                    ]
+                ),
+            ),
+            (
+                "Block confidential Jira comments",
+                "Blocks confidential data classes from being posted into Jira comments.",
+                PolicySeverity.CRITICAL,
+                PolicyDecision.BLOCK,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                        {"field": "action_name", "operator": "contains", "value": "comment"},
+                        {"field": "data_classification", "operator": "contains", "value": "confidential"},
+                    ]
+                ),
+            ),
+            (
+                "Block Jira destructive actions",
+                "Blocks destructive Jira actions until the platform adds explicit support and review paths.",
+                PolicySeverity.CRITICAL,
+                PolicyDecision.BLOCK,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                        {"field": "action_name", "operator": "contains", "value": "delete"},
+                    ]
+                ),
+            ),
+            (
+                "Require approval for external MCP tools",
+                "Routes external MCP tool calls through human review.",
+                PolicySeverity.HIGH,
+                PolicyDecision.REQUIRE_APPROVAL,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "MCP"},
+                        {"field": "action_name", "operator": "equals", "value": "call_tool"},
+                        {"field": "recipient_domain", "operator": "equals", "value": "external"},
+                    ]
+                ),
+            ),
+            (
+                "Require approval for side-effecting MCP tools",
+                "Routes write-capable MCP tool calls through human review.",
+                PolicySeverity.HIGH,
+                PolicyDecision.REQUIRE_APPROVAL,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "MCP"},
+                        {"field": "action_name", "operator": "equals", "value": "call_tool"},
+                        {"field": "data_classification", "operator": "contains", "value": "remote_tool_side_effect"},
+                    ]
+                ),
+            ),
+            (
+                "Block dangerous MCP tool names",
+                "Blocks dangerous MCP tool names until explicitly modeled and approved.",
+                PolicySeverity.CRITICAL,
+                PolicyDecision.BLOCK,
+                _policy_conditions(
+                    rules=[
+                        {"field": "tool_name", "operator": "equals", "value": "MCP"},
+                        {"field": "data_classification", "operator": "contains", "value": "dangerous_remote_tool_name"},
+                    ]
+                ),
+            ),
         ]
         for name, description, severity, decision, conditions in policies:
             policy = db.scalar(select(Policy).where(Policy.tenant_id == tenant.id, Policy.name == name))
@@ -244,7 +334,7 @@ def seed() -> None:
                         severity=severity,
                         conditions=conditions,
                         decision=decision,
-                        created_by=created_users["reviewer@demo.agentgate.local"].id,
+                        created_by=created_users["reviewer@demo.agentgate.example.com"].id,
                     )
                 )
 
@@ -258,7 +348,7 @@ def seed() -> None:
             trace = ExecutionTrace(
                 tenant_id=tenant.id,
                 agent_id=agent.id,
-                user_id=created_users["admin@demo.agentgate.local"].id,
+                user_id=created_users["admin@demo.agentgate.example.com"].id,
                 original_intent="Prepare and send a renewal proposal to Acme Corp.",
                 status=TraceStatus.COMPLETED,
                 summary="Seeded demo trace",
@@ -291,8 +381,8 @@ def seed() -> None:
         db.commit()
         print("Seed complete.")
         print("Tenant slug: demo-agentgate")
-        print("Admin login: admin@demo.agentgate.local / AgentGate123!")
-        print("Reviewer login: reviewer@demo.agentgate.local / AgentGate123!")
+        print("Admin login: admin@demo.agentgate.example.com / AgentGate123!")
+        print("Reviewer login: reviewer@demo.agentgate.example.com / AgentGate123!")
     finally:
         db.close()
 

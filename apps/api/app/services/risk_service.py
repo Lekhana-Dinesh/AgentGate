@@ -8,13 +8,23 @@ from app.schemas.gateway import RiskAssessmentFactor, RiskAssessmentResult
 
 ACTION_RISK_WEIGHTS = {
     "read": 5,
+    "list": 5,
+    "search": 5,
     "query": 10,
     "create": 15,
     "issue": 12,
     "comment": 18,
+    "post": 15,
     "pull_request": 10,
+    "assign": 12,
+    "transition": 18,
+    "write": 18,
     "update": 20,
     "send": 25,
+    "transfer": 30,
+    "execute": 30,
+    "shell": 35,
+    "admin": 20,
     "delete": 35,
     "export": 40,
     "refund": 30,
@@ -106,6 +116,18 @@ class RiskService:
                     explanation="External recipients increase the chance of unintended data disclosure.",
                 )
             )
+        elif data.recipient_domain == "unknown":
+            score += 8
+            reasons.append("Unknown recipient or trust domain increases governance uncertainty.")
+            factors.append(
+                RiskAssessmentFactor(
+                    key="recipient:unknown",
+                    label="Unknown recipient or trust domain",
+                    category="recipient",
+                    weight=8.0,
+                    explanation="Unknown trust boundaries increase the chance of mis-scoped external execution.",
+                )
+            )
 
         if any(item in {"internal_pricing", "confidential", "pii", "financial"} for item in data.data_classifications):
             score += 15
@@ -117,6 +139,71 @@ class RiskService:
                     category="data",
                     weight=15.0,
                     explanation="The request includes internal or regulated data classes.",
+                )
+            )
+
+        if any(item in {"customer_visible", "external_project"} for item in data.data_classifications):
+            score += 10
+            reasons.append("Customer-visible or external workflow context increases change-management risk.")
+            factors.append(
+                RiskAssessmentFactor(
+                    key="data:customer_visible",
+                    label="Customer-visible workflow",
+                    category="data",
+                    weight=10.0,
+                    explanation="The request targets a customer-visible or external project workflow.",
+                )
+            )
+
+        if "dangerous_remote_tool_name" in data.data_classifications:
+            score += 20
+            reasons.append("Remote tool name includes dangerous execution semantics.")
+            factors.append(
+                RiskAssessmentFactor(
+                    key="data:dangerous_remote_tool_name",
+                    label="Dangerous remote tool name",
+                    category="data",
+                    weight=20.0,
+                    explanation="The nested remote tool name suggests execution, deletion, transfer, or admin behavior.",
+                )
+            )
+
+        if any(item in {"remote_tool_side_effect", "blocked_remote_tool_name"} for item in data.data_classifications):
+            score += 15
+            reasons.append("Remote tool appears to perform side effects and needs stronger change control.")
+            factors.append(
+                RiskAssessmentFactor(
+                    key="data:remote_tool_side_effect",
+                    label="Remote tool side effect",
+                    category="data",
+                    weight=15.0,
+                    explanation="The nested remote tool is likely to create, update, send, or execute actions.",
+                )
+            )
+
+        if "unknown_remote_tool_name" in data.data_classifications:
+            score += 10
+            reasons.append("Requested remote tool is outside the expected allowlisted semantics.")
+            factors.append(
+                RiskAssessmentFactor(
+                    key="data:unknown_remote_tool_name",
+                    label="Unknown remote tool",
+                    category="data",
+                    weight=10.0,
+                    explanation="The nested remote tool name is not recognized within the configured tool scope.",
+                )
+            )
+
+        if any(item in {"large_request_payload", "large_response_budget"} for item in data.data_classifications):
+            score += 10
+            reasons.append("Large request or response budgets increase exposure if data handling is wrong.")
+            factors.append(
+                RiskAssessmentFactor(
+                    key="data:large_payload_budget",
+                    label="Large request or response budget",
+                    category="data",
+                    weight=10.0,
+                    explanation="Large payloads increase the blast radius for leakage, replay, or operator error.",
                 )
             )
 

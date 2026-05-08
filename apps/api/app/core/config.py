@@ -22,9 +22,20 @@ _ENV_VAR_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTED_KEY_PROVIDERS = {
     "env",
     "aws_kms",
-    "gcp_kms",
-    "azure_key_vault",
-    "hashicorp_vault",
+}
+_SUPPORTED_AUDIT_INTEGRITY_ANCHOR_TYPES = {
+    "local",
+    "object_storage",
+    "custom_placeholder",
+}
+_SUPPORTED_AUTH_SESSION_MODES = {
+    "token",
+    "cookie",
+}
+_SUPPORTED_COOKIE_SAMESITE = {
+    "lax",
+    "strict",
+    "none",
 }
 _WEAK_SECRET_MARKERS = {
     "",
@@ -35,7 +46,7 @@ _WEAK_SECRET_MARKERS = {
     "password",
     "agentgate",
 }
-_DEFAULT_BOOTSTRAP_OWNER_EMAIL = "owner@demo.agentgate.local"
+_DEFAULT_BOOTSTRAP_OWNER_EMAIL = "owner@demo.agentgate.example.com"
 _DEFAULT_BOOTSTRAP_OWNER_PASSWORD = "ChangeThis123!"
 
 
@@ -102,6 +113,9 @@ class Settings(BaseSettings):
     public_api_url: str = "http://localhost:8000"
     allow_insecure_public_urls: bool = False
     key_provider: str = "env"
+    aws_region: str | None = None
+    aws_kms_key_id: str | None = None
+    aws_kms_endpoint_url: str | None = None
     payload_encryption_key: str | None = None
     payload_encryption_key_secret_ref: str | None = None
     payload_encryption_active_key_ref: str = "configured-env"
@@ -117,25 +131,52 @@ class Settings(BaseSettings):
     slack_default_channel: str | None = None
     slack_timeout_seconds: float = 5.0
     audit_export_timeout_seconds: float = 5.0
+    audit_integrity_anchor_type: str = "local"
+    audit_integrity_local_path: str = ".tmp/audit-integrity-checkpoints"
+    audit_integrity_s3_bucket: str | None = None
+    audit_integrity_s3_prefix: str = "agentgate/audit-integrity"
+    audit_integrity_s3_region: str | None = None
+    audit_integrity_s3_endpoint_url: str | None = None
+    audit_integrity_s3_access_key_id_ref: str | None = None
+    audit_integrity_s3_secret_access_key_ref: str | None = None
+    audit_integrity_s3_session_token_ref: str | None = None
     allow_private_audit_export_destinations: bool = False
     oidc_http_timeout_seconds: float = 5.0
     oidc_state_ttl_seconds: int = 600
     oidc_exchange_ttl_seconds: int = 180
+    scim_tenant_token_refs: dict[str, str] = Field(default_factory=dict)
+    auth_session_mode: str = "token"
+    cookie_secure: bool = False
+    cookie_samesite: str = "lax"
+    cookie_domain: str | None = None
+    csrf_enabled: bool = True
     job_dispatch_mode: str = "inline"
     job_broker: str = "database"
     job_redis_queue_name: str = "agentgate:jobs"
     job_poll_interval_seconds: float = 2.0
     job_worker_batch_size: int = 10
+    job_stale_recovery_batch_size: int = 25
+    job_lease_seconds: float = 300.0
+    scheduler_poll_interval_seconds: float = 5.0
+    scheduler_batch_size: int = 25
+    worker_id: str | None = None
+    worker_heartbeat_interval_seconds: float = 5.0
+    worker_stale_after_seconds: float = 30.0
     job_slack_max_attempts: int = 3
     job_slack_retry_backoff_seconds: float = 30.0
     job_audit_export_max_attempts: int = 3
     job_audit_export_retry_backoff_seconds: float = 30.0
+    job_audit_integrity_checkpoint_max_attempts: int = 3
+    job_audit_integrity_checkpoint_retry_backoff_seconds: float = 30.0
     job_retention_max_attempts: int = 2
     job_retention_retry_backoff_seconds: float = 60.0
     payload_retention_standard_days: int = 30
     payload_retention_short_lived_days: int = 7
     payload_retention_extended_days: int = 90
     rate_limit_enabled: bool | None = None
+    rate_limit_provider: str = "in_memory"
+    allow_in_memory_rate_limit_in_production: bool = False
+    rate_limit_fail_open_on_backend_error: bool = False
     rate_limit_login_limit: int = 5
     rate_limit_login_window_seconds: int = 60
     rate_limit_oidc_limit: int = 10
@@ -148,6 +189,12 @@ class Settings(BaseSettings):
     rate_limit_audit_export_window_seconds: int = 300
     rate_limit_retention_limit: int = 4
     rate_limit_retention_window_seconds: int = 300
+    rate_limit_jobs_retry_limit: int = 6
+    rate_limit_jobs_retry_window_seconds: int = 300
+    rate_limit_audit_integrity_limit: int = 4
+    rate_limit_audit_integrity_window_seconds: int = 300
+    rate_limit_scim_limit: int = 10
+    rate_limit_scim_window_seconds: int = 60
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -174,9 +221,41 @@ class Settings(BaseSettings):
         normalized = str(value).strip().lower()
         if normalized not in _SUPPORTED_KEY_PROVIDERS:
             raise ValueError(
-                "AGENTGATE_KEY_PROVIDER must be one of env, aws_kms, gcp_kms, azure_key_vault, hashicorp_vault."
+                "AGENTGATE_KEY_PROVIDER must be one of env or aws_kms."
             )
         return normalized
+
+    @field_validator("aws_region", "aws_kms_key_id", "aws_kms_endpoint_url", mode="before")
+    @classmethod
+    def normalize_optional_key_provider_strings(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("audit_integrity_anchor_type", mode="before")
+    @classmethod
+    def normalize_audit_integrity_anchor_type(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in _SUPPORTED_AUDIT_INTEGRITY_ANCHOR_TYPES:
+            raise ValueError(
+                "AGENTGATE_AUDIT_INTEGRITY_ANCHOR_TYPE must be local, object_storage, or custom_placeholder."
+            )
+        return normalized
+
+    @field_validator(
+        "audit_integrity_local_path",
+        "audit_integrity_s3_bucket",
+        "audit_integrity_s3_prefix",
+        "audit_integrity_s3_region",
+        "audit_integrity_s3_endpoint_url",
+        "audit_integrity_s3_access_key_id_ref",
+        "audit_integrity_s3_secret_access_key_ref",
+        "audit_integrity_s3_session_token_ref",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_audit_integrity_anchor_strings(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
 
     @field_validator("payload_encryption_key_secret_ref", mode="before")
     @classmethod
@@ -197,6 +276,7 @@ class Settings(BaseSettings):
         return normalized or None
 
     @field_validator(
+        "scim_tenant_token_refs",
         "payload_encryption_additional_keys",
         "payload_encryption_additional_key_versions",
         mode="before",
@@ -204,6 +284,13 @@ class Settings(BaseSettings):
     @classmethod
     def parse_string_mapping(cls, value: Any) -> dict[str, str]:
         return _parse_string_mapping(value)
+
+    @field_validator("scim_tenant_token_refs")
+    @classmethod
+    def validate_scim_tenant_token_refs(cls, value: dict[str, str]) -> dict[str, str]:
+        for raw_reference in value.values():
+            _env_var_from_secret_reference(raw_reference)
+        return value
 
     @field_validator("job_dispatch_mode", mode="before")
     @classmethod
@@ -213,12 +300,94 @@ class Settings(BaseSettings):
             raise ValueError("AGENTGATE_JOB_DISPATCH_MODE must be inline or worker.")
         return normalized
 
+    @field_validator("auth_session_mode", mode="before")
+    @classmethod
+    def normalize_auth_session_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in _SUPPORTED_AUTH_SESSION_MODES:
+            raise ValueError("AGENTGATE_AUTH_SESSION_MODE must be token or cookie.")
+        return normalized
+
+    @field_validator("cookie_samesite", mode="before")
+    @classmethod
+    def normalize_cookie_samesite(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in _SUPPORTED_COOKIE_SAMESITE:
+            raise ValueError("AGENTGATE_COOKIE_SAMESITE must be lax, strict, or none.")
+        return normalized
+
+    @field_validator("cookie_domain", mode="before")
+    @classmethod
+    def normalize_cookie_domain(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip().lower()
+        return normalized or None
+
     @field_validator("job_broker", mode="before")
     @classmethod
     def normalize_job_broker(cls, value: str) -> str:
         normalized = str(value).strip().lower()
         if normalized not in {"database", "redis"}:
             raise ValueError("AGENTGATE_JOB_BROKER must be database or redis.")
+        return normalized
+
+    @field_validator("rate_limit_provider", mode="before")
+    @classmethod
+    def normalize_rate_limit_provider(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in {"in_memory", "redis"}:
+            raise ValueError("AGENTGATE_RATE_LIMIT_PROVIDER must be in_memory or redis.")
+        return normalized
+
+    @field_validator("worker_id", mode="before")
+    @classmethod
+    def normalize_worker_id(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator(
+        "job_worker_batch_size",
+        "job_stale_recovery_batch_size",
+        "scheduler_batch_size",
+        "job_slack_max_attempts",
+        "job_audit_export_max_attempts",
+        "job_audit_integrity_checkpoint_max_attempts",
+        "job_retention_max_attempts",
+        mode="before",
+    )
+    @classmethod
+    def normalize_positive_job_ints(cls, value: int | str) -> int:
+        normalized = int(value)
+        if normalized <= 0:
+            raise ValueError("Job configuration integer values must be positive.")
+        return normalized
+
+    @field_validator(
+        "job_poll_interval_seconds",
+        "job_lease_seconds",
+        "scheduler_poll_interval_seconds",
+        "worker_heartbeat_interval_seconds",
+        "worker_stale_after_seconds",
+        mode="before",
+    )
+    @classmethod
+    def normalize_positive_job_durations(cls, value: float | int | str) -> float:
+        normalized = float(value)
+        if normalized <= 0:
+            raise ValueError("Job configuration duration values must be positive.")
+        return normalized
+
+    @field_validator(
+        "job_slack_retry_backoff_seconds",
+        "job_audit_export_retry_backoff_seconds",
+        "job_audit_integrity_checkpoint_retry_backoff_seconds",
+        "job_retention_retry_backoff_seconds",
+        mode="before",
+    )
+    @classmethod
+    def normalize_non_negative_job_backoffs(cls, value: float | int | str) -> float:
+        normalized = float(value)
+        if normalized < 0:
+            raise ValueError("Job retry backoff values must be zero or positive.")
         return normalized
 
     @field_validator(
@@ -234,6 +403,12 @@ class Settings(BaseSettings):
         "rate_limit_audit_export_window_seconds",
         "rate_limit_retention_limit",
         "rate_limit_retention_window_seconds",
+        "rate_limit_jobs_retry_limit",
+        "rate_limit_jobs_retry_window_seconds",
+        "rate_limit_audit_integrity_limit",
+        "rate_limit_audit_integrity_window_seconds",
+        "rate_limit_scim_limit",
+        "rate_limit_scim_window_seconds",
         mode="before",
     )
     @classmethod
@@ -251,12 +426,31 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AGENTGATE_SECRET_KEY must be explicitly set to a strong value outside development/test."
             )
-        if self.key_provider != "env":
-            raise ValueError(
-                "AGENTGATE_KEY_PROVIDER currently supports only the env provider in this build."
-            )
         if self.job_broker == "redis" and not str(self.redis_url or "").strip():
             raise ValueError("AGENTGATE_REDIS_URL must be configured when AGENTGATE_JOB_BROKER=redis.")
+        if self.rate_limit_provider == "redis" and not str(self.redis_url or "").strip():
+            raise ValueError("AGENTGATE_REDIS_URL must be configured when AGENTGATE_RATE_LIMIT_PROVIDER=redis.")
+        if self.worker_stale_after_seconds <= self.worker_heartbeat_interval_seconds:
+            raise ValueError(
+                "AGENTGATE_WORKER_STALE_AFTER_SECONDS must be greater than AGENTGATE_WORKER_HEARTBEAT_INTERVAL_SECONDS."
+            )
+        if self.job_lease_seconds <= self.worker_stale_after_seconds:
+            raise ValueError(
+                "AGENTGATE_JOB_LEASE_SECONDS must be greater than AGENTGATE_WORKER_STALE_AFTER_SECONDS."
+            )
+        if self.audit_integrity_anchor_type == "local" and production_like:
+            raise ValueError(
+                "AGENTGATE_AUDIT_INTEGRITY_ANCHOR_TYPE=local is only allowed in development or test."
+            )
+        if self.audit_integrity_anchor_type == "object_storage":
+            if not self.audit_integrity_s3_bucket:
+                raise ValueError(
+                    "AGENTGATE_AUDIT_INTEGRITY_S3_BUCKET must be configured when AGENTGATE_AUDIT_INTEGRITY_ANCHOR_TYPE=object_storage."
+                )
+            if not (self.audit_integrity_s3_region or self.aws_region):
+                raise ValueError(
+                    "AGENTGATE_AUDIT_INTEGRITY_S3_REGION or AGENTGATE_AWS_REGION must be configured when AGENTGATE_AUDIT_INTEGRITY_ANCHOR_TYPE=object_storage."
+                )
 
         if production_like:
             if not self.cors_origins:
@@ -289,39 +483,81 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "AGENTGATE_PUBLIC_APP_URL must be configured when Slack approval links are enabled."
                 )
+            if self.rate_limit_provider == "in_memory" and not self.allow_in_memory_rate_limit_in_production:
+                raise ValueError(
+                    "AGENTGATE_RATE_LIMIT_PROVIDER=in_memory is not allowed outside development/test unless "
+                    "AGENTGATE_ALLOW_IN_MEMORY_RATE_LIMIT_IN_PRODUCTION=true."
+                )
+
+        if self.auth_session_mode == "cookie":
+            if self.cookie_samesite == "none" and not self.cookie_secure:
+                raise ValueError("AGENTGATE_COOKIE_SECURE must be true when AGENTGATE_COOKIE_SAMESITE=none.")
+            if production_like and not self.cookie_secure:
+                raise ValueError(
+                    "AGENTGATE_COOKIE_SECURE must be true when AGENTGATE_AUTH_SESSION_MODE=cookie outside development/test."
+                )
+            if production_like and not self.csrf_enabled:
+                raise ValueError(
+                    "AGENTGATE_CSRF_ENABLED must remain true when AGENTGATE_AUTH_SESSION_MODE=cookie outside development/test."
+                )
+            if self.cookie_domain and self.cookie_domain.startswith("."):
+                raise ValueError("AGENTGATE_COOKIE_DOMAIN must not start with a leading dot.")
 
         normalized_payload_key = (self.payload_encryption_key or "").strip()
         active_key_value = normalized_payload_key or None
         active_key_ref = self.payload_encryption_active_key_ref
         active_key_secret_ref = str(self.payload_encryption_key_secret_ref or "").strip()
-        if active_key_secret_ref:
-            env_var = _env_var_from_secret_reference(active_key_secret_ref)
-            if env_var is None:
-                raise ValueError(
-                    "AGENTGATE_PAYLOAD_ENCRYPTION_KEY_SECRET_REF must use an env reference in this build."
-                )
-            active_key_value = os.getenv(env_var, "").strip() or None
-        elif active_key_ref in self.payload_encryption_additional_keys:
-            env_var = _env_var_from_secret_reference(self.payload_encryption_additional_keys[active_key_ref])
-            if env_var:
+        if self.key_provider == "env":
+            if active_key_secret_ref:
+                env_var = _env_var_from_secret_reference(active_key_secret_ref)
+                if env_var is None:
+                    raise ValueError(
+                        "AGENTGATE_PAYLOAD_ENCRYPTION_KEY_SECRET_REF must use an env reference when AGENTGATE_KEY_PROVIDER=env."
+                    )
                 active_key_value = os.getenv(env_var, "").strip() or None
-            elif self.environment not in {"development", "test"}:
+            elif active_key_ref in self.payload_encryption_additional_keys:
+                env_var = _env_var_from_secret_reference(self.payload_encryption_additional_keys[active_key_ref])
+                if env_var:
+                    active_key_value = os.getenv(env_var, "").strip() or None
+                elif self.environment not in {"development", "test"}:
+                    raise ValueError(
+                        "The active payload encryption key reference must use an env reference when AGENTGATE_KEY_PROVIDER=env."
+                    )
+
+            if production_like and not active_key_value:
                 raise ValueError(
-                    "The active payload encryption key reference must use an env reference in this build."
+                    "A payload encryption key or resolvable active key reference must be configured outside development/test when AGENTGATE_KEY_PROVIDER=env."
                 )
 
-        if production_like and not active_key_value:
-            raise ValueError(
-                "A payload encryption key or resolvable active key reference must be configured outside development/test."
-            )
-
-        if active_key_value:
-            try:
-                Fernet(active_key_value.encode("utf-8"))
-            except Exception as exc:
+            if active_key_value:
+                try:
+                    Fernet(active_key_value.encode("utf-8"))
+                except Exception as exc:
+                    raise ValueError(
+                        "The active payload encryption key must be a valid Fernet key."
+                    ) from exc
+        elif self.key_provider == "aws_kms":
+            if not self.aws_region:
                 raise ValueError(
-                    "The active payload encryption key must be a valid Fernet key."
-                ) from exc
+                    "AGENTGATE_AWS_REGION must be configured when AGENTGATE_KEY_PROVIDER=aws_kms."
+                )
+            if not self.aws_kms_key_id:
+                raise ValueError(
+                    "AGENTGATE_AWS_KMS_KEY_ID must be configured when AGENTGATE_KEY_PROVIDER=aws_kms."
+                )
+            if self.aws_kms_endpoint_url:
+                if not is_http_url(self.aws_kms_endpoint_url):
+                    raise ValueError("AGENTGATE_AWS_KMS_ENDPOINT_URL must be a valid http or https URL.")
+                if production_like and is_loopback_or_private_url(self.aws_kms_endpoint_url):
+                    raise ValueError(
+                        "AGENTGATE_AWS_KMS_ENDPOINT_URL must not point at localhost or private-network endpoints outside development/test."
+                    )
+                if production_like and not self.allow_insecure_public_urls and not uses_https(
+                    self.aws_kms_endpoint_url
+                ):
+                    raise ValueError(
+                        "AGENTGATE_AWS_KMS_ENDPOINT_URL must use https outside development/test unless AGENTGATE_ALLOW_INSECURE_PUBLIC_URLS=true."
+                    )
         return self
 
     def _is_weak_secret(self, value: str) -> bool:

@@ -168,6 +168,36 @@ def configure_metrics_registry(registry: MetricsRegistry) -> MetricsRegistry:
         labels=("status",),
     )
     registry.register_counter(
+        "agentgate_jobs_retries_total",
+        "Job retries triggered by automatic recovery, stale recovery, or manual operator action.",
+        labels=("job_type", "trigger"),
+    )
+    registry.register_counter(
+        "agentgate_jobs_stale_recovered_total",
+        "Stale running jobs recovered by outcome.",
+        labels=("job_type", "outcome"),
+    )
+    registry.register_counter(
+        "agentgate_jobs_lease_expired_total",
+        "Running job leases that expired before completion.",
+        labels=("job_type",),
+    )
+    registry.register_counter(
+        "agentgate_jobs_dead_letter_total",
+        "Jobs moved to terminal dead-letter review states.",
+        labels=("job_type", "status"),
+    )
+    registry.register_gauge(
+        "agentgate_jobs_dead_letter_current",
+        "Current dead-lettered durable job counts by terminal status.",
+        labels=("status",),
+    )
+    registry.register_gauge(
+        "agentgate_workers_current",
+        "Current worker counts by effective status.",
+        labels=("status",),
+    )
+    registry.register_counter(
         "agentgate_audit_export_runs_total",
         "Audit export run outcomes.",
         labels=("result",),
@@ -187,14 +217,44 @@ def configure_metrics_registry(registry: MetricsRegistry) -> MetricsRegistry:
         "Protected payloads purged by retention jobs.",
     )
     registry.register_counter(
+        "agentgate_scheduler_enqueues_total",
+        "Scheduled task enqueue attempts that created durable jobs.",
+        labels=("task_type", "trigger"),
+    )
+    registry.register_counter(
+        "agentgate_scheduler_errors_total",
+        "Scheduler dispatch or loop errors.",
+        labels=("task_type", "trigger", "error_code"),
+    )
+    registry.register_gauge(
+        "agentgate_scheduled_tasks_due_current",
+        "Current enabled scheduled tasks that are due by task type.",
+        labels=("task_type",),
+    )
+    registry.register_gauge(
+        "agentgate_scheduled_tasks_last_status_current",
+        "Current scheduled task counts by last recorded scheduler status.",
+        labels=("last_status",),
+    )
+    registry.register_counter(
         "agentgate_oidc_logins_total",
         "OIDC login outcomes.",
         labels=("result",),
     )
     registry.register_counter(
+        "agentgate_rate_limit_requests_total",
+        "Rate limit decisions by provider, scope, and outcome.",
+        labels=("provider", "scope", "outcome"),
+    )
+    registry.register_counter(
+        "agentgate_rate_limit_backend_errors_total",
+        "Rate limiter backend errors by provider and scope.",
+        labels=("provider", "scope"),
+    )
+    registry.register_counter(
         "agentgate_rate_limit_exceeded_total",
         "Requests rejected by rate limiting.",
-        labels=("scope",),
+        labels=("provider", "scope"),
     )
     return registry
 

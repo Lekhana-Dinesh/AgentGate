@@ -467,10 +467,17 @@ class AuditExportService:
         db: Session,
         *,
         config: AuditExportConfig,
-        requested_by: User,
+        requested_by: User | None,
         dry_run: bool,
         ip_address: str | None,
+        actor_type: AuditActorType | None = None,
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+        source: str = "manual",
+        scheduled_task_id: str | None = None,
     ) -> Job:
+        effective_actor_type = actor_type or (AuditActorType.USER if requested_by else AuditActorType.SYSTEM)
+        effective_actor_id = actor_id or (requested_by.id if requested_by else None)
         if not config.enabled:
             raise AppError(
                 "Audit export config is disabled.",
@@ -491,12 +498,14 @@ class AuditExportService:
             db,
             tenant_id=config.tenant_id,
             job_type=JobType.AUDIT_EXPORT_PLACEHOLDER,
-            idempotency_key=f"audit_export.placeholder:{config.id}:{utcnow().timestamp()}",
+            idempotency_key=idempotency_key or f"audit_export.placeholder:{config.id}:{utcnow().timestamp()}",
             payload={
                 "config_id": config.id,
                 "dry_run": dry_run,
-                "requested_by_user_id": requested_by.id,
+                "requested_by_user_id": requested_by.id if requested_by else None,
                 "ip_address": ip_address,
+                "source": source,
+                "scheduled_task_id": scheduled_task_id,
             },
             max_attempts=(
                 1
@@ -510,8 +519,8 @@ class AuditExportService:
         self.audit_service.create_event(
             db,
             tenant_id=config.tenant_id,
-            actor_type=AuditActorType.USER,
-            actor_id=requested_by.id,
+            actor_type=effective_actor_type,
+            actor_id=effective_actor_id,
             event_type=AUDIT_EXPORT_RUN_QUEUED_EVENT,
             resource_type="audit_export_config",
             resource_id=config.id,
@@ -519,6 +528,8 @@ class AuditExportService:
                 "job_id": job.id,
                 "dry_run": dry_run,
                 "destination_type": config.destination_type.value,
+                "source": source,
+                "scheduled_task_id": scheduled_task_id,
             },
             ip_address=ip_address,
         )
@@ -784,6 +795,12 @@ class AuditExportService:
             "resource_type": event.resource_type,
             "resource_id": event.resource_id,
             "metadata": metadata,
+            "integrity": {
+                "event_hash": event.event_hash,
+                "previous_event_hash": event.previous_event_hash,
+                "sequence_number": event.sequence_number,
+                "hash_algorithm": event.hash_algorithm,
+            },
             "ip_address": event.ip_address,
             "created_at": event.created_at.isoformat(),
         }

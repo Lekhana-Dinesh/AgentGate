@@ -9,7 +9,14 @@ from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.core.redaction import redact_sensitive_string
 from app.tools.base import ToolExecutionAdapter, ToolExecutionRequest
-from app.tools.github_auth import EnvironmentTokenAuthProvider, GitHubAuthProvider
+from app.tools.github_auth import (
+    ConfiguredGitHubAuthProvider,
+    GITHUB_AUTH_MODE_ENV_PAT,
+    GITHUB_AUTH_MODE_ENV_TOKEN,
+    GITHUB_AUTH_MODE_GITHUB_APP,
+    GitHubAuthContext,
+    GitHubAuthProvider,
+)
 
 DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_TIMEOUT_SECONDS = 15.0
@@ -39,7 +46,7 @@ class GitHubToolAdapter(ToolExecutionAdapter):
         auth_provider: GitHubAuthProvider | None = None,
     ) -> None:
         self.client_factory = client_factory
-        self.auth_provider = auth_provider or EnvironmentTokenAuthProvider()
+        self.auth_provider = auth_provider or ConfiguredGitHubAuthProvider()
 
     def supports(self, request: ToolExecutionRequest) -> bool:
         return request.tool_type == "github"
@@ -50,12 +57,13 @@ class GitHubToolAdapter(ToolExecutionAdapter):
         owner, repo = self._resolve_repository(request.arguments)
         repository = f"{owner}/{repo}"
         self._assert_repository_allowed(repository, request.config)
-        auth_context = self.auth_provider.get_auth_context(request.config)
+        base_url = request.base_url or DEFAULT_GITHUB_API_BASE_URL
+        auth_context = self.auth_provider.get_auth_context(request.config, base_url=base_url)
         timeout = self._build_timeout(request.config)
         max_attempts, backoff_seconds = self._read_retry_config(request.config)
 
         with self._build_client(
-            base_url=request.base_url or DEFAULT_GITHUB_API_BASE_URL,
+            base_url=base_url,
             auth_headers=auth_context.auth_headers,
             timeout=timeout,
         ) as client:
@@ -211,26 +219,39 @@ class GitHubToolAdapter(ToolExecutionAdapter):
         config: dict,
         probe: bool = False,
     ) -> dict:
-        auth_context = self.auth_provider.get_auth_context(config, require_token=False)
-        response = {
-            "adapter": self.adapter_name,
-            "auth_provider": auth_context.provider_name,
-            "token_env_var": auth_context.token_env_var,
-            "secret_reference": auth_context.secret_reference,
-            "token_present": auth_context.token_present,
-            "probe_performed": False,
-            "can_connect": None,
-            "status": "ready" if auth_context.token_present else "unconfigured",
-            "repository_allowlist_count": len((config or {}).get("repository_allowlist") or []),
-        }
-        if not probe or not auth_context.token_present:
+        resolved_base_url = base_url or DEFAULT_GITHUB_API_BASE_URL
+        try:
+            auth_context = self.auth_provider.get_auth_context(
+                config,
+                require_token=False,
+                base_url=resolved_base_url,
+            )
+        except AppError as exc:
+            return self._build_unhealthy_health_response(config=config, exc=exc)
+
+        response = self._build_health_response(auth_context=auth_context, config=config)
+        if not probe or not auth_context.credentials_configured:
             return response
 
         timeout = self._build_timeout(config)
         try:
+            probe_auth_context = auth_context
+            if not probe_auth_context.token_present:
+                probe_auth_context = self.auth_provider.get_auth_context(
+                    config,
+                    require_token=True,
+                    base_url=resolved_base_url,
+                )
+                response.update(
+                    {
+                        "token_present": probe_auth_context.token_present,
+                        "token_expires_at": probe_auth_context.token_expires_at,
+                        "cache_hit": probe_auth_context.cache_hit,
+                    }
+                )
             with self._build_client(
-                base_url=base_url or DEFAULT_GITHUB_API_BASE_URL,
-                auth_headers=auth_context.auth_headers,
+                base_url=resolved_base_url,
+                auth_headers=probe_auth_context.auth_headers,
                 timeout=timeout,
             ) as client:
                 payload = self._request_json(
@@ -261,8 +282,12 @@ class GitHubToolAdapter(ToolExecutionAdapter):
                 {
                     "probe_performed": True,
                     "can_connect": False,
-                    "status": "degraded",
-                    "details": {"error_code": exc.code, "error_detail": redact_sensitive_string(exc.detail)},
+                    "status": self._health_status_from_error_code(exc.code),
+                    "details": {
+                        **(response.get("details") or {}),
+                        "error_code": exc.code,
+                        "error_detail": redact_sensitive_string(exc.detail),
+                    },
                 }
             )
             return response
@@ -281,6 +306,78 @@ class GitHubToolAdapter(ToolExecutionAdapter):
             status_code=400,
             code="github_action_not_allowed",
         )
+
+    def _build_health_response(
+        self,
+        *,
+        auth_context: GitHubAuthContext,
+        config: dict,
+    ) -> dict:
+        status = "ready" if auth_context.credentials_configured else "unconfigured"
+        if auth_context.warnings:
+            status = "degraded" if auth_context.credentials_configured else "unconfigured"
+        return {
+            "adapter": self.adapter_name,
+            "auth_provider": auth_context.provider_name,
+            "token_env_var": auth_context.token_env_var,
+            "secret_reference": auth_context.secret_reference,
+            "token_present": auth_context.token_present,
+            "credentials_configured": auth_context.credentials_configured,
+            "probe_performed": False,
+            "can_connect": None,
+            "status": status,
+            "repository_allowlist_count": len((config or {}).get("repository_allowlist") or []),
+            "app_id": auth_context.app_id,
+            "installation_id": auth_context.installation_id,
+            "private_key_env_var": auth_context.private_key_env_var,
+            "private_key_reference_type": auth_context.private_key_reference_type,
+            "token_expires_at": auth_context.token_expires_at,
+            "cache_hit": auth_context.cache_hit,
+            "warnings": list(auth_context.warnings),
+        }
+
+    def _build_unhealthy_health_response(self, *, config: dict, exc: AppError) -> dict:
+        return {
+            "adapter": self.adapter_name,
+            "auth_provider": self._configured_auth_provider_name(config),
+            "token_env_var": str((config or {}).get("token_env_var") or "").strip() or None,
+            "secret_reference": None,
+            "token_present": False,
+            "credentials_configured": False,
+            "probe_performed": False,
+            "can_connect": None,
+            "status": self._health_status_from_error_code(exc.code),
+            "repository_allowlist_count": len((config or {}).get("repository_allowlist") or []),
+            "app_id": str((config or {}).get("app_id") or "").strip() or None,
+            "installation_id": str((config or {}).get("installation_id") or "").strip() or None,
+            "private_key_env_var": str((config or {}).get("private_key_env_var") or "").strip() or None,
+            "private_key_reference_type": None,
+            "token_expires_at": None,
+            "cache_hit": False,
+            "warnings": [],
+            "details": {
+                "error_code": exc.code,
+                "error_detail": redact_sensitive_string(exc.detail),
+            },
+        }
+
+    def _configured_auth_provider_name(self, config: dict) -> str:
+        auth_mode = str((config or {}).get("auth_mode") or GITHUB_AUTH_MODE_ENV_PAT).strip().lower()
+        if auth_mode == GITHUB_AUTH_MODE_GITHUB_APP:
+            return GITHUB_AUTH_MODE_GITHUB_APP
+        if auth_mode in {GITHUB_AUTH_MODE_ENV_PAT, GITHUB_AUTH_MODE_ENV_TOKEN}:
+            return GITHUB_AUTH_MODE_ENV_TOKEN
+        return auth_mode or "unknown"
+
+    def _health_status_from_error_code(self, code: str | None) -> str:
+        if code == "github_auth_mode_unsupported":
+            return "unsupported"
+        if code in {
+            "github_credentials_missing",
+            "github_app_credentials_missing",
+        }:
+            return "unconfigured"
+        return "degraded"
 
     def _build_client(
         self,

@@ -4,9 +4,12 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import JobType
 from app.services.audit_export_service import AuditExportService
+from app.services.audit_integrity_checkpoint_service import AuditIntegrityCheckpointService
 from app.services.approved_execution_service import ApprovedExecutionService
+from app.services.audit_integrity_service import AuditIntegrityService
 from app.services.notification_service import NotificationService
 from app.services.retention_service import RetentionService
+from app.services.tool_health_service import ToolHealthService
 
 
 def dispatch_job(db: Session, job) -> None:
@@ -23,6 +26,15 @@ def dispatch_job(db: Session, job) -> None:
         JobType.AUDIT_EXPORT_PLACEHOLDER,
     }:
         AuditExportService().handle_audit_export_job(db, job=job)
+        return
+    if job.job_type == JobType.AUDIT_INTEGRITY_VERIFY_PLACEHOLDER:
+        AuditIntegrityService().handle_verify_job(db, job=job)
+        return
+    if job.job_type == JobType.AUDIT_INTEGRITY_CHECKPOINT_PLACEHOLDER:
+        AuditIntegrityCheckpointService().handle_checkpoint_job(db, job=job)
+        return
+    if job.job_type == JobType.CONNECTOR_HEALTH_CHECK_PLACEHOLDER:
+        ToolHealthService().handle_connector_health_check_job(db, job=job)
         return
     raise ValueError(f"Unsupported job type: {job.job_type}")
 

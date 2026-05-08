@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.enums import AuditActorType, UserRole
+from app.core.enums import AuditActorType, UserProvisionedSource, UserRole
 from app.core.errors import AppError
 from app.core.metrics import get_metrics_registry
 from app.core.security import (
@@ -319,6 +319,7 @@ class OIDCService:
             existing.full_name = identity.full_name
             existing.auth_provider = config.provider_name
             existing.external_subject = identity.subject
+            existing.provisioned_source = UserProvisionedSource.OIDC
             if role_resolution.explicit_match:
                 existing.role = role_resolution.role
             db.flush()
@@ -333,6 +334,7 @@ class OIDCService:
             external_subject=identity.subject,
             role=role_resolution.role,
             is_active=True,
+            provisioned_source=UserProvisionedSource.OIDC,
         )
         db.add(user)
         db.flush()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "0005_add_job_queue_foundation"
@@ -17,14 +18,15 @@ down_revision = "0004_payload_protection_foundation"
 branch_labels = None
 depends_on = None
 
-job_type_enum = sa.Enum(
+job_type_enum = postgresql.ENUM(
     "approval_notification.slack",
     "approval_execution.tool_call",
     "audit_export.placeholder",
     "retention_purge.placeholder",
     name="jobtype",
+    create_type=False,
 )
-job_status_enum = sa.Enum(
+job_status_enum = postgresql.ENUM(
     "queued",
     "running",
     "succeeded",
@@ -32,6 +34,7 @@ job_status_enum = sa.Enum(
     "retry_exhausted",
     "cancelled",
     name="jobstatus",
+    create_type=False,
 )
 
 

@@ -8,6 +8,8 @@ SENSITIVE_DATA_CLASSES = {"internal_pricing", "confidential", "pii", "financial"
 SEND_KEYWORDS = {"send", "email", "share", "deliver"}
 COMMENT_KEYWORDS = {"comment", "reply", "post"}
 ISSUE_KEYWORDS = {"issue", "ticket"}
+ASSIGN_KEYWORDS = {"assign", "owner"}
+TRANSITION_KEYWORDS = {"transition", "move", "status"}
 DELETE_KEYWORDS = {"delete", "remove", "purge"}
 EXPORT_KEYWORDS = {"export", "dump", "download"}
 REFUND_KEYWORDS = {"refund", "credit", "discount"}
@@ -25,7 +27,8 @@ class IntentContext:
 class IntentService:
     def evaluate(self, ctx: IntentContext) -> IntentCheckResult:
         intent_text = ctx.original_intent.lower()
-        action_text = f"{ctx.tool_name} {ctx.action_name}".lower()
+        remote_tool_name = str(ctx.arguments.get("tool_name") or "").strip()
+        action_text = f"{ctx.tool_name} {ctx.action_name} {remote_tool_name}".lower()
         reasons: list[str] = []
 
         if any(keyword in action_text for keyword in SEND_KEYWORDS) and not any(
@@ -42,6 +45,16 @@ class IntentService:
             keyword in intent_text for keyword in ISSUE_KEYWORDS
         ):
             reasons.append("The action creates or changes work items, but the original intent does not mention that workflow.")
+
+        if any(keyword in action_text for keyword in ASSIGN_KEYWORDS) and not any(
+            keyword in intent_text for keyword in ASSIGN_KEYWORDS | ISSUE_KEYWORDS
+        ):
+            reasons.append("The action assigns work, but the original intent does not mention assignment authority.")
+
+        if any(keyword in action_text for keyword in TRANSITION_KEYWORDS) and not any(
+            keyword in intent_text for keyword in TRANSITION_KEYWORDS | ISSUE_KEYWORDS
+        ):
+            reasons.append("The action changes workflow state, but the original intent does not mention that transition.")
 
         if any(keyword in action_text for keyword in DELETE_KEYWORDS) and not any(
             keyword in intent_text for keyword in DELETE_KEYWORDS

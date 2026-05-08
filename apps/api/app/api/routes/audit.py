@@ -60,6 +60,12 @@ def list_audit_events(
             resource_id=item.resource_id,
             metadata_json=payload_service.sanitize_payload(item.metadata_json),
             ip_address=item.ip_address,
+            event_hash=item.event_hash,
+            previous_event_hash=item.previous_event_hash,
+            hash_algorithm=item.hash_algorithm,
+            chain_scope=item.chain_scope,
+            sequence_number=item.sequence_number,
+            anchored_at=item.anchored_at,
             created_at=item.created_at,
         )
         for item in events

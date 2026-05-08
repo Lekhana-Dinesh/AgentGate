@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -13,9 +14,11 @@ from starlette.responses import Response
 from app.api.router import api_router
 from app.core.metrics import get_metrics_registry
 from app.core.config import get_settings
+from app.core.errors import AppError
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.db.init_db import init_db
+from app.security.browser_sessions import should_enforce_csrf, validate_csrf_request
 
 settings = get_settings()
 configure_logging()
@@ -81,6 +84,27 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class CSRFMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if should_enforce_csrf(request):
+            try:
+                validate_csrf_request(request)
+            except AppError as exc:
+                request.state.error_code = exc.code
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={
+                        "error": {
+                            "code": exc.code,
+                            "detail": exc.detail,
+                            "extra": exc.extra,
+                            "request_id": getattr(request.state, "request_id", None),
+                        }
+                    },
+                )
+        return await call_next(request)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     current_settings = get_settings()
@@ -99,14 +123,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-CSRF-Token", "X-Request-ID"],
 )
-app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 app.include_router(api_router)
 register_exception_handlers(app)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 from sqlalchemy import select
@@ -195,7 +196,7 @@ class GatewayService:
 
         risk_input = RiskInput(
             tool_risk=tool.risk_level,
-            action_name=payload.action_name,
+            action_name=self._risk_action_name(payload.action_name, payload.arguments),
             data_classifications=effective_data_classifications,
             recipient_domain=recipient_domain,
             environment=agent.environment.value,
@@ -567,6 +568,9 @@ class GatewayService:
         if "@" not in recipient:
             if tool.type == ToolType.GITHUB:
                 return "internal" if repo_trust == "internal" else "external"
+            configured_trust_domain = self._configured_trust_domain(tool)
+            if configured_trust_domain:
+                return configured_trust_domain
             return "internal"
         domain = recipient.split("@")[-1].lower()
         internal_domains = {
@@ -636,6 +640,56 @@ class GatewayService:
         repo_trust: str,
     ) -> list[str]:
         augmented = list(dict.fromkeys(data_classifications))
+        configured_trust_domain = self._configured_trust_domain(tool)
+        if configured_trust_domain == "external" and "external_tool_domain" not in augmented:
+            augmented.append("external_tool_domain")
+        if configured_trust_domain == "unknown" and "unknown_tool_domain" not in augmented:
+            augmented.append("unknown_tool_domain")
+
+        nested_tool_name = str(arguments.get("tool_name") or "").strip()
+        if nested_tool_name:
+            normalized_tool_name = nested_tool_name.casefold()
+            dangerous_keywords = {"delete", "send", "transfer", "execute", "shell", "admin"}
+            side_effect_keywords = {
+                "create",
+                "comment",
+                "write",
+                "post",
+                "send",
+                "assign",
+                "transition",
+                "update",
+                "execute",
+                "shell",
+                "admin",
+                "transfer",
+            }
+            if any(keyword in normalized_tool_name for keyword in dangerous_keywords):
+                augmented.append("dangerous_remote_tool_name")
+            if any(keyword in normalized_tool_name for keyword in side_effect_keywords):
+                augmented.append("remote_tool_side_effect")
+            allowed_remote_tools = {
+                str(item).strip().casefold()
+                for item in ((tool.config or {}).get("allowed_tool_names") or [])
+                if str(item).strip()
+            }
+            blocked_remote_tools = {
+                str(item).strip().casefold()
+                for item in ((tool.config or {}).get("blocked_tool_names") or [])
+                if str(item).strip()
+            }
+            if allowed_remote_tools and normalized_tool_name not in allowed_remote_tools:
+                augmented.append("unknown_remote_tool_name")
+            if normalized_tool_name in blocked_remote_tools:
+                augmented.append("blocked_remote_tool_name")
+
+        request_bytes = self._serialized_size(arguments)
+        if request_bytes >= 8192 and "large_request_payload" not in augmented:
+            augmented.append("large_request_payload")
+        max_response_bytes = self._extract_integer_argument(tool.config or {}, "max_response_bytes")
+        if max_response_bytes is not None and max_response_bytes >= 131072 and "large_response_budget" not in augmented:
+            augmented.append("large_response_budget")
+
         if tool.type != ToolType.GITHUB:
             return augmented
 
@@ -668,7 +722,17 @@ class GatewayService:
         recipient_domain: str,
     ) -> dict:
         if tool.type != ToolType.GITHUB:
-            return {}
+            context: dict[str, object] = {}
+            configured_trust_domain = self._configured_trust_domain(tool)
+            if configured_trust_domain:
+                context["trust_domain"] = configured_trust_domain
+            transport = str((tool.config or {}).get("transport") or "").strip().lower()
+            if transport:
+                context["transport"] = transport
+            nested_tool_name = str(arguments.get("tool_name") or "").strip()
+            if nested_tool_name:
+                context["remote_tool_name"] = nested_tool_name
+            return context
 
         repository = str(arguments.get("repository") or "").strip()
         if not repository and arguments.get("owner") and arguments.get("repo"):
@@ -685,6 +749,24 @@ class GatewayService:
             "repository_visibility": visibility or "unknown",
             "recipient_domain": recipient_domain,
         }
+
+    def _configured_trust_domain(self, tool: Tool) -> str | None:
+        value = str((tool.config or {}).get("trust_domain") or "").strip().lower()
+        if value in {"internal", "external", "unknown"}:
+            return value
+        return None
+
+    def _risk_action_name(self, action_name: str, arguments: dict) -> str:
+        nested_tool_name = str(arguments.get("tool_name") or "").strip()
+        if not nested_tool_name:
+            return action_name
+        return f"{action_name} {nested_tool_name}"
+
+    def _serialized_size(self, value: dict) -> int:
+        try:
+            return len(json.dumps(value, sort_keys=True, default=str).encode("utf-8"))
+        except (TypeError, ValueError):
+            return 0
 
     def _extract_amount(self, arguments: dict) -> float | None:
         for key in ("discount_percent", "amount", "refund_amount", "row_count"):

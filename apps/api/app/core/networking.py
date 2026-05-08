@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 
 DEVELOPMENT_ENVIRONMENTS = {"development", "test"}
+# `0.0.0.0` is classified here as an unsafe/local host input, not as a bind target.  # nosec B104
 LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String
+from sqlalchemy import DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import ApprovalStatus
 from app.db.base import Base
 from app.models.base import UUIDPrimaryKeyMixin, utcnow
+from app.models.enum_types import enum_value_type
 
 
 class ApprovalRequest(UUIDPrimaryKeyMixin, Base):
@@ -28,7 +29,7 @@ class ApprovalRequest(UUIDPrimaryKeyMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[ApprovalStatus] = mapped_column(
-        Enum(ApprovalStatus), default=ApprovalStatus.PENDING, nullable=False
+        enum_value_type(ApprovalStatus), default=ApprovalStatus.PENDING, nullable=False
     )
     reason: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
     approver_comment: Mapped[str | None] = mapped_column(String(2000), nullable=True)

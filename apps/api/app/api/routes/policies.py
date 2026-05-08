@@ -38,7 +38,7 @@ def list_policies(
 @router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED)
 def create_policy(
     payload: PolicyCreate,
-    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.SECURITY_REVIEWER)),
+    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
     db: Session = Depends(get_db),
 ) -> PolicyResponse:
     policy = Policy(
@@ -68,7 +68,7 @@ def create_policy(
 def update_policy(
     policy_id: str,
     payload: PolicyUpdate,
-    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.SECURITY_REVIEWER)),
+    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
     db: Session = Depends(get_db),
 ) -> PolicyResponse:
     policy = db.scalar(select(Policy).where(Policy.id == policy_id, Policy.tenant_id == current_user.tenant_id))

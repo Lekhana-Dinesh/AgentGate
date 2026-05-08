@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Index, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import AuditExportDestinationType
 from app.db.base import Base
 from app.models.base import TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.enum_types import enum_value_type
 
 
 class AuditExportConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -22,7 +23,7 @@ class AuditExportConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     destination_type: Mapped[AuditExportDestinationType] = mapped_column(
-        Enum(AuditExportDestinationType),
+        enum_value_type(AuditExportDestinationType),
         nullable=False,
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -47,7 +47,6 @@ def enqueue_retention_purge(
         require_roles(
             UserRole.OWNER,
             UserRole.ADMIN,
-            UserRole.SECURITY_REVIEWER,
         )
     ),
     db: Session = Depends(get_db),

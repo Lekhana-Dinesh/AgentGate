@@ -14,6 +14,8 @@ from app.security.key_management import (
     get_key_provider,
 )
 from app.services.notification_service import NotificationService
+from app.services.rate_limit_service import get_rate_limiter
+from app.core.enums import ScheduledTaskType
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +68,7 @@ class ReadinessService:
                 active_key_version=None,
                 configured_key_refs=[],
                 status="unconfigured",
+                region=None,
                 warnings=[exc.detail],
             )
         return ComponentStatus(
@@ -75,7 +78,8 @@ class ReadinessService:
                 "purpose": purpose_status.purpose,
                 "active_key_ref": purpose_status.active_key_ref,
                 "active_key_version": purpose_status.active_key_version,
-                "status": purpose_status.status,
+                "region": purpose_status.region,
+                "readiness": purpose_status.status,
                 "warnings": list(purpose_status.warnings),
             },
         )
@@ -105,15 +109,43 @@ class ReadinessService:
             },
         )
 
+    def check_rate_limiter(self) -> ComponentStatus:
+        status = get_rate_limiter().get_status()
+        return ComponentStatus(
+            status=str(status.pop("status")),
+            details=status,
+        )
+
+    def check_scheduler(self) -> ComponentStatus:
+        settings = get_settings()
+        return ComponentStatus(
+            status="ok",
+            details={
+                "loop_command": "python -m app.scheduler",
+                "poll_interval_seconds": settings.scheduler_poll_interval_seconds,
+                "batch_size": settings.scheduler_batch_size,
+                "cron_timezone": "UTC",
+                "supported_task_types": [item.value for item in ScheduledTaskType],
+            },
+        )
+
     def get_ready_payload(self) -> tuple[int, dict[str, object]]:
         database = self.check_database()
         jobs = self.check_jobs()
         keys = self.check_keys()
         integrations = self.check_integrations()
+        rate_limiter = self.check_rate_limiter()
+        scheduler = self.check_scheduler()
 
         overall_status = "ready"
         http_status = 200
         if database.status != "ok":
+            overall_status = "not_ready"
+            http_status = 503
+        elif keys.status in {"unconfigured", "unavailable"}:
+            overall_status = "not_ready"
+            http_status = 503
+        elif rate_limiter.status == "unavailable":
             overall_status = "not_ready"
             http_status = 503
 
@@ -124,5 +156,7 @@ class ReadinessService:
                 "jobs": {"status": jobs.status, **jobs.details},
                 "keys": {"status": keys.status, **keys.details},
                 "integrations": {"status": integrations.status, **integrations.details},
+                "rate_limiter": {"status": rate_limiter.status, **rate_limiter.details},
+                "scheduler": {"status": scheduler.status, **scheduler.details},
             },
         }

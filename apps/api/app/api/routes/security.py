@@ -37,16 +37,19 @@ def get_key_status(
             active_key_version=None,
             configured_key_refs=[],
             status="unconfigured",
+            region=None,
             warnings=[exc.detail],
         )
         return KeyStatusResponse(
             provider=provider.provider_name,
+            readiness="unconfigured",
             purposes=[purpose_status],
             warnings=warnings,
         )
 
     return KeyStatusResponse(
         provider=provider.provider_name,
+        readiness=purpose_status.status,
         purposes=[
             KeyPurposeStatusResponse(
                 purpose=purpose_status.purpose,
@@ -55,6 +58,7 @@ def get_key_status(
                 active_key_version=purpose_status.active_key_version,
                 configured_key_refs=purpose_status.configured_key_refs,
                 status=purpose_status.status,
+                region=purpose_status.region,
                 warnings=purpose_status.warnings,
             )
         ],

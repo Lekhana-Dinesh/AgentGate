@@ -7,6 +7,7 @@ from app.schemas.gateway import GatewayDecisionResponse, ToolCallRequest, ToolCa
 from app.schemas.policy import PolicyCreate, PolicyResponse, PolicyUpdate
 from app.schemas.tool import ToolCreate, ToolResponse, ToolUpdate
 from app.schemas.trace import TraceCreate, TraceResponse, TraceStepCreate, TraceStepResponse
+from app.schemas.user import UserResponse, UserUpdateRequest
 
 __all__ = [
     "AgentAPIKeyCreate",
@@ -35,4 +36,6 @@ __all__ = [
     "TraceResponse",
     "TraceStepCreate",
     "TraceStepResponse",
+    "UserResponse",
+    "UserUpdateRequest",
 ]

@@ -1,8 +1,12 @@
 from app.security.key_management import (
+    AWS_KMS_DATA_KEY_WRAP_ALGORITHM,
+    KEY_PROVIDER_AWS_KMS,
     KEY_PROVIDER_ENV,
     KEY_PURPOSE_PAYLOAD_PROTECTION,
     LEGACY_CONFIGURED_ENV_KEY_REF,
     LOCAL_FALLBACK_KEY_REF,
+    AwsKmsKeyProvider,
+    EnvelopeKeyProvider,
     KeyManagementError,
     KeyMetadata,
     KeyPurposeStatus,
@@ -29,12 +33,16 @@ from app.security.secret_references import (
 )
 
 __all__ = [
+    "AWS_KMS_DATA_KEY_WRAP_ALGORITHM",
+    "KEY_PROVIDER_AWS_KMS",
     "KEY_PROVIDER_ENV",
     "KEY_PURPOSE_PAYLOAD_PROTECTION",
     "LEGACY_CONFIGURED_ENV_KEY_REF",
     "LOCAL_FALLBACK_KEY_REF",
+    "AwsKmsKeyProvider",
     "ENCRYPTED_ALGORITHM",
     "ENCRYPTED_MARKER",
+    "EnvelopeKeyProvider",
     "KeyManagementError",
     "KeyMetadata",
     "KeyPurposeStatus",

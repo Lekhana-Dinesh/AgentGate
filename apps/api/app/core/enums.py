@@ -12,6 +12,13 @@ class UserRole(StrEnum):
     VIEWER = "viewer"
 
 
+class UserProvisionedSource(StrEnum):
+    LOCAL = "local"
+    OIDC = "oidc"
+    SCIM = "scim"
+    SYSTEM = "system"
+
+
 class AgentEnvironment(StrEnum):
     DEVELOPMENT = "development"
     STAGING = "staging"
@@ -32,6 +39,7 @@ class ToolType(StrEnum):
     EMAIL = "email"
     CRM = "crm"
     GITHUB = "github"
+    JIRA = "jira"
     CUSTOM = "custom"
 
 
@@ -86,11 +94,26 @@ class AuditExportDestinationType(StrEnum):
     CUSTOM_PLACEHOLDER = "custom_placeholder"
 
 
+class AuditIntegrityCheckpointType(StrEnum):
+    LOCAL = "local"
+    OBJECT_STORAGE = "object_storage"
+    CUSTOM_PLACEHOLDER = "custom_placeholder"
+
+
+class AuditIntegrityCheckpointStatus(StrEnum):
+    PENDING = "pending"
+    ANCHORED = "anchored"
+    FAILED = "failed"
+
+
 class JobType(StrEnum):
     APPROVAL_NOTIFICATION_SLACK = "approval_notification.slack"
     APPROVAL_EXECUTION_TOOL_CALL = "approval_execution.tool_call"
     AUDIT_EXPORT_PLACEHOLDER = "audit_export.placeholder"
     RETENTION_PURGE_PLACEHOLDER = "retention_purge.placeholder"
+    AUDIT_INTEGRITY_VERIFY_PLACEHOLDER = "audit_integrity_verify.placeholder"
+    AUDIT_INTEGRITY_CHECKPOINT_PLACEHOLDER = "audit_integrity_checkpoint.placeholder"
+    CONNECTOR_HEALTH_CHECK_PLACEHOLDER = "connector_health_check.placeholder"
 
 
 class JobStatus(StrEnum):
@@ -100,6 +123,25 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     RETRY_EXHAUSTED = "retry_exhausted"
     CANCELLED = "cancelled"
+
+
+class WorkerStatus(StrEnum):
+    RUNNING = "running"
+    STALE = "stale"
+    STOPPED = "stopped"
+
+
+class ScheduledTaskType(StrEnum):
+    RETENTION_PURGE = "retention_purge"
+    AUDIT_EXPORT = "audit_export"
+    AUDIT_INTEGRITY_VERIFY = "audit_integrity_verify"
+    AUDIT_INTEGRITY_CHECKPOINT = "audit_integrity_checkpoint"
+    CONNECTOR_HEALTH_CHECK = "connector_health_check"
+
+
+class ScheduledTaskScheduleKind(StrEnum):
+    INTERVAL = "interval"
+    CRON = "cron"
 
 
 class AuditActorType(StrEnum):

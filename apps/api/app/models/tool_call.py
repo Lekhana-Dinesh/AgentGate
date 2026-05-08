@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, JSON, String
+from sqlalchemy import DateTime, Float, ForeignKey, Index, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import ToolCallStatus
 from app.db.base import Base
 from app.models.base import UUIDPrimaryKeyMixin, utcnow
+from app.models.enum_types import enum_value_type
 
 
 class ToolCall(UUIDPrimaryKeyMixin, Base):
@@ -33,7 +34,7 @@ class ToolCall(UUIDPrimaryKeyMixin, Base):
     payload_retention_class: Mapped[str] = mapped_column(String(64), default="standard", nullable=False)
     payload_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payload_redaction_status: Mapped[str] = mapped_column(String(64), default="sanitized", nullable=False)
-    status: Mapped[ToolCallStatus] = mapped_column(Enum(ToolCallStatus), nullable=False)
+    status: Mapped[ToolCallStatus] = mapped_column(enum_value_type(ToolCallStatus), nullable=False)
     risk_score: Mapped[float] = mapped_column(Float, nullable=False)
     decision_reason: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

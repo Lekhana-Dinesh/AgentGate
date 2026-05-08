@@ -11,11 +11,13 @@ class KeyPurposeStatusResponse(BaseModel):
     active_key_ref: str | None = None
     active_key_version: str | None = None
     configured_key_refs: list[str] = Field(default_factory=list)
-    status: Literal["ready", "degraded", "unconfigured"]
+    status: Literal["ready", "degraded", "unconfigured", "unavailable"]
+    region: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
 class KeyStatusResponse(BaseModel):
     provider: str
+    readiness: Literal["ready", "degraded", "unconfigured", "unavailable"]
     purposes: list[KeyPurposeStatusResponse] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

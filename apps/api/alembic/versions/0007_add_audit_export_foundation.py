@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "0007_add_audit_export_foundation"
@@ -19,13 +20,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    destination_type_enum = sa.Enum(
+    destination_type_enum = postgresql.ENUM(
         "webhook",
         "splunk_hec",
         "datadog",
         "http_json",
         "custom_placeholder",
         name="auditexportdestinationtype",
+        create_type=False,
     )
     destination_type_enum.create(op.get_bind(), checkfirst=True)
 
@@ -68,12 +70,13 @@ def downgrade() -> None:
     op.drop_index("ix_audit_export_configs_tenant_id", table_name="audit_export_configs")
     op.drop_table("audit_export_configs")
 
-    destination_type_enum = sa.Enum(
+    destination_type_enum = postgresql.ENUM(
         "webhook",
         "splunk_hec",
         "datadog",
         "http_json",
         "custom_placeholder",
         name="auditexportdestinationtype",
+        create_type=False,
     )
     destination_type_enum.drop(op.get_bind(), checkfirst=True)

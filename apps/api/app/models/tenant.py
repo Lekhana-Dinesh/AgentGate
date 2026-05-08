@@ -18,6 +18,8 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     users = relationship("User", back_populates="tenant")
     oidc_configs = relationship("TenantOIDCConfig", back_populates="tenant")
     audit_export_configs = relationship("AuditExportConfig", back_populates="tenant")
+    audit_integrity_checkpoints = relationship("AuditIntegrityCheckpoint", back_populates="tenant")
+    scheduled_tasks = relationship("ScheduledTask", back_populates="tenant")
     agents = relationship("Agent", back_populates="tenant")
     tools = relationship("Tool", back_populates="tenant")
     policies = relationship("Policy", back_populates="tenant")

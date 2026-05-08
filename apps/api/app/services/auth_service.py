@@ -6,11 +6,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.enums import UserRole
+from app.core.enums import UserProvisionedSource, UserRole
 from app.core.errors import AppError
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models import Tenant, User
-from app.schemas.auth import BootstrapOwnerRequest, CreateUserRequest, LoginRequest, TokenResponse
+from app.schemas.auth import BootstrapOwnerRequest, CreateUserRequest, LoginRequest
 
 
 def slugify(value: str) -> str:
@@ -19,7 +19,7 @@ def slugify(value: str) -> str:
 
 
 class AuthService:
-    def bootstrap_owner(self, db: Session, payload: BootstrapOwnerRequest) -> TokenResponse:
+    def bootstrap_owner(self, db: Session, payload: BootstrapOwnerRequest) -> str:
         user_count = db.scalar(select(func.count()).select_from(User)) or 0
         if user_count > 0:
             raise AppError(
@@ -43,20 +43,19 @@ class AuthService:
             hashed_password=hash_password(payload.password),
             role=UserRole.OWNER,
             is_active=True,
+            provisioned_source=UserProvisionedSource.LOCAL,
         )
         db.add(user)
         db.commit()
         db.refresh(user)
 
-        return TokenResponse(
-            access_token=create_access_token(
-                user_id=user.id,
-                tenant_id=user.tenant_id,
-                role=user.role.value,
-            )
+        return create_access_token(
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            role=user.role.value,
         )
 
-    def login(self, db: Session, payload: LoginRequest) -> TokenResponse:
+    def login(self, db: Session, payload: LoginRequest) -> str:
         query = select(User).where(User.email == payload.email.lower())
         if payload.tenant_slug:
             tenant = db.scalar(select(Tenant).where(Tenant.slug == slugify(payload.tenant_slug)))
@@ -78,12 +77,10 @@ class AuthService:
             raise AppError("Invalid credentials.", status_code=401, code="invalid_credentials")
         if not user.is_active:
             raise AppError("User account is inactive.", status_code=403, code="inactive_user")
-        return TokenResponse(
-            access_token=create_access_token(
-                user_id=user.id,
-                tenant_id=user.tenant_id,
-                role=user.role.value,
-            )
+        return create_access_token(
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            role=user.role.value,
         )
 
     def create_user(self, db: Session, tenant_id: str, payload: CreateUserRequest) -> User:
@@ -100,6 +97,7 @@ class AuthService:
             hashed_password=hash_password(payload.password),
             role=payload.role,
             is_active=True,
+            provisioned_source=UserProvisionedSource.LOCAL,
         )
         db.add(user)
         db.commit()
