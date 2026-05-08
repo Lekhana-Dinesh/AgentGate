@@ -1,0 +1,26 @@
+format: table
+exit-code: 1
+severity:
+  - HIGH
+  - CRITICAL
+ignore-unfixed: true
+scanners:
+  - vuln
+  - misconfig
+skip-dirs:
+  - .git
+  - .tmp
+  - .venv
+  - venv
+  - __pycache__
+  - apps/api/.tmp
+  - apps/api/.pytest_cache
+  - apps/api/__pycache__
+  - apps/web/.next
+  - apps/web/.npm-cache
+  - apps/web/node_modules
+skip-files:
+  - apps/api/migrate_check.db
+  - apps/api/.coverage
+timeout: 10m
+list-all-pkgs: false

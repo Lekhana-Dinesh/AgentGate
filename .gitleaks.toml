@@ -1,0 +1,19 @@
+title = "AgentGate gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic secrets intentionally used in backend tests to verify redaction paths"
+paths = ['''apps/api/app/tests/.*''']
+
+[[allowlists]]
+description = "Documented demo credentials and example placeholder values"
+regexes = [
+  '''AgentGate123!''',
+  '''ChangeThis123!''',
+  '''demo\.agentgate\.local''',
+  '''ghp_your_token_here''',
+  '''xoxb-your-bot-token''',
+  '''Bearer\s+<token>''',
+]
