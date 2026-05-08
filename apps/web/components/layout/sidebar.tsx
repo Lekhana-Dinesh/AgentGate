@@ -7,12 +7,18 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "Overview" },
+  { href: "/onboarding", label: "Onboarding" },
   { href: "/agents", label: "Agents" },
+  { href: "/tools", label: "Tools" },
   { href: "/tool-calls", label: "Tool Calls" },
   { href: "/approvals", label: "Approvals" },
   { href: "/jobs", label: "Jobs" },
+  { href: "/audit-integrity", label: "Audit Integrity" },
   { href: "/audit-exports", label: "Audit Exports" },
   { href: "/retention", label: "Retention" },
+  { href: "/scheduled-tasks", label: "Scheduled Tasks" },
+  { href: "/users", label: "Users & Identity" },
+  { href: "/settings", label: "Settings" },
   { href: "/policies", label: "Policies" },
   { href: "/traces", label: "Traces" },
   { href: "/audit", label: "Audit" },
@@ -32,7 +38,7 @@ export function Sidebar() {
         </p>
       </div>
 
-      <nav className="mt-8 flex flex-col gap-2">
+      <nav aria-label="Primary" className="mt-8 flex flex-col gap-2">
         {navItems.map((item) => {
           const active =
             item.href === "/"

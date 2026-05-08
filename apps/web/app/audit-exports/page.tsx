@@ -13,28 +13,41 @@ import { formatDate } from "@/lib/utils";
 import { useSession } from "@/hooks/use-session";
 import type { AuditExportRunResponse } from "@/types/api";
 
+function describeEndpoint(endpointUrl: string): string {
+  try {
+    return new URL(endpointUrl).host;
+  } catch {
+    return endpointUrl;
+  }
+}
+
 export default function AuditExportsPage() {
-  const { token } = useSession();
+  const { token, user } = useSession();
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeConfigId, setActiveConfigId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [lastRunByConfig, setLastRunByConfig] = useState<Record<string, AuditExportRunResponse>>({});
-  const { data, loading, error } = useAuthedQuery(
+  const { data, loading, error, setData } = useAuthedQuery(
     () => apiClient.listAuditExports(token || ""),
     [token, refreshKey],
     Boolean(token),
   );
+  const canManageExports = user?.role === "owner" || user?.role === "admin";
+  const isReadOnlyReviewer = user?.role === "security_reviewer";
 
   async function handleRun(configId: string, dryRun: boolean) {
-    if (!token) {
+    if (!token || !canManageExports) {
       return;
     }
     setActionError(null);
+    setActionMessage(null);
     setActiveConfigId(`${configId}:${dryRun ? "dry-run" : "run"}`);
     try {
       const response = await apiClient.runAuditExport(token, configId, { dry_run: dryRun });
       setLastRunByConfig((current) => ({ ...current, [configId]: response }));
       setRefreshKey((current) => current + 1);
+      setActionMessage(dryRun ? "Audit export dry-run queued." : "Audit export run queued.");
     } catch (err) {
       const message =
         err instanceof ApiError && err.requestId
@@ -42,6 +55,30 @@ export default function AuditExportsPage() {
           : err instanceof Error
             ? err.message
             : "Audit export run failed.";
+      setActionError(message);
+    } finally {
+      setActiveConfigId(null);
+    }
+  }
+
+  async function handleToggle(configId: string, enabled: boolean, name: string) {
+    if (!token || !canManageExports) {
+      return;
+    }
+    setActionError(null);
+    setActionMessage(null);
+    setActiveConfigId(`${configId}:toggle`);
+    try {
+      const updated = await apiClient.updateAuditExport(token, configId, { enabled: !enabled });
+      setData((current) => current?.map((item) => (item.id === updated.id ? updated : item)) || []);
+      setActionMessage(`Audit export "${name}" ${updated.enabled ? "enabled" : "disabled"}.`);
+    } catch (err) {
+      const message =
+        err instanceof ApiError && err.requestId
+          ? `${err.message} Request ID: ${err.requestId}`
+          : err instanceof Error
+            ? err.message
+            : "Audit export update failed.";
       setActionError(message);
     } finally {
       setActiveConfigId(null);
@@ -63,13 +100,26 @@ export default function AuditExportsPage() {
           <p className="text-sm text-rose-700">{actionError}</p>
         </Card>
       ) : null}
+      {actionMessage ? (
+        <Card className="mb-6">
+          <p className="text-sm text-emerald-700">{actionMessage}</p>
+        </Card>
+      ) : null}
 
       <Card className="mb-6">
-        <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Operator Notes</p>
-        <h3 className="mt-3 text-xl font-semibold text-slate-950">Sanitized export visibility only</h3>
-        <p className="mt-2 text-sm text-slate-500">
-          Secrets never appear here. Use the privileged API to create or update destinations; the dashboard focuses on enablement, last result, and safe manual runs.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Operator Notes</p>
+            <h3 className="mt-3 text-xl font-semibold text-slate-950">Sanitized export visibility only</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              Secrets never appear here. Use the privileged API to create destinations; this page stays focused on enablement, last result, and safe manual runs.
+            </p>
+            <p className="mt-2 text-sm text-slate-500">
+              Owner and admin roles can enable, disable, and run exports. Security reviewers stay read-only.
+            </p>
+          </div>
+          {user ? <Badge tone={canManageExports ? "active" : "degraded"}>{canManageExports ? "Manage" : "Read only"}</Badge> : null}
+        </div>
       </Card>
 
       <Card>
@@ -104,7 +154,7 @@ export default function AuditExportsPage() {
                   <tr key={config.id}>
                     <Td>
                       <div className="font-medium text-slate-950">{config.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">{config.endpoint_url}</div>
+                      <div className="mt-1 text-xs text-slate-500">{describeEndpoint(config.endpoint_url)}</div>
                     </Td>
                     <Td>
                       <Badge tone="low">{config.destination_type}</Badge>
@@ -140,21 +190,38 @@ export default function AuditExportsPage() {
                       ) : null}
                     </Td>
                     <Td>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="secondary"
-                          onClick={() => void handleRun(config.id, true)}
-                          disabled={!config.enabled || activeConfigId !== null}
-                        >
-                          {activeConfigId === dryRunKey ? "Running..." : "Dry-run"}
-                        </Button>
-                        <Button
-                          onClick={() => void handleRun(config.id, false)}
-                          disabled={!config.enabled || activeConfigId !== null}
-                        >
-                          {activeConfigId === runKey ? "Running..." : "Run export"}
-                        </Button>
-                      </div>
+                      {canManageExports ? (
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="secondary"
+                            onClick={() => void handleToggle(config.id, config.enabled, config.name)}
+                            disabled={activeConfigId !== null}
+                          >
+                            {activeConfigId === `${config.id}:toggle`
+                              ? "Saving..."
+                              : config.enabled
+                                ? "Disable"
+                                : "Enable"}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={() => void handleRun(config.id, true)}
+                            disabled={!config.enabled || activeConfigId !== null}
+                          >
+                            {activeConfigId === dryRunKey ? "Running..." : "Dry-run"}
+                          </Button>
+                          <Button
+                            onClick={() => void handleRun(config.id, false)}
+                            disabled={!config.enabled || activeConfigId !== null}
+                          >
+                            {activeConfigId === runKey ? "Running..." : "Run export"}
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500">
+                          {isReadOnlyReviewer ? "Review only" : "No access"}
+                        </span>
+                      )}
                     </Td>
                   </tr>
                 );

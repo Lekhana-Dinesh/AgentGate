@@ -31,8 +31,8 @@ function formatSSOError(code: string | null): string | null {
 }
 
 export default function LoginPage() {
-  const { token, login, completeLoginWithAccessToken } = useSession();
-  const [email, setEmail] = useState("admin@demo.agentgate.local");
+  const { token, login, completeLogin } = useSession();
+  const [email, setEmail] = useState("admin@demo.agentgate.example.com");
   const [password, setPassword] = useState("AgentGate123!");
   const [tenantSlug, setTenantSlug] = useState("demo-agentgate");
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +91,7 @@ export default function LoginPage() {
             document.title,
             `/login?tenant_slug=${encodeURIComponent(redirectedTenantSlug)}`,
           );
-          await completeLoginWithAccessToken(tokenResponse.access_token);
+          await completeLogin(tokenResponse);
         }
       } catch (err) {
         if (!cancelled) {
@@ -108,7 +108,7 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [completeLoginWithAccessToken, tenantSlug, token]);
+  }, [completeLogin, tenantSlug, token]);
 
   useEffect(() => {
     if (!tenantSlug.trim()) {
@@ -214,16 +214,38 @@ export default function LoginPage() {
 
           <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">Tenant slug</label>
-              <Input value={tenantSlug} onChange={(event) => setTenantSlug(event.target.value)} />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">Email</label>
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">Password</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="tenant-slug">
+                Tenant slug
+              </label>
               <Input
+                autoComplete="organization"
+                id="tenant-slug"
+                name="tenant_slug"
+                value={tenantSlug}
+                onChange={(event) => setTenantSlug(event.target.value)}
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="email">
+                Email
+              </label>
+              <Input
+                autoComplete="email"
+                id="email"
+                name="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                type="email"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="password">
+                Password
+              </label>
+              <Input
+                autoComplete="current-password"
+                id="password"
+                name="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 type="password"
@@ -263,10 +285,10 @@ export default function LoginPage() {
           <div className="mt-8 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
             <p className="font-semibold text-slate-800">Seeded demo access</p>
             <p className="mt-2">
-              Admin: <code>admin@demo.agentgate.local</code> / <code>AgentGate123!</code>
+              Admin: <code>admin@demo.agentgate.example.com</code> / <code>AgentGate123!</code>
             </p>
             <p className="mt-1">
-              Reviewer: <code>reviewer@demo.agentgate.local</code> / <code>AgentGate123!</code>
+              Reviewer: <code>reviewer@demo.agentgate.example.com</code> / <code>AgentGate123!</code>
             </p>
           </div>
         </Card>

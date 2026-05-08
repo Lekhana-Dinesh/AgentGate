@@ -1,25 +1,54 @@
 import { apiBaseUrl } from "@/lib/config";
-import { clearSession } from "@/lib/session";
+import {
+  clearSession,
+  clearStoredCsrfToken,
+  COOKIE_SESSION_TOKEN,
+  getStoredCsrfToken,
+  isCookieSessionToken,
+  setStoredCsrfToken,
+} from "@/lib/session";
 import type {
   Agent,
+  AgentAPIKeyResponse,
+  AgentAPIKeySummary,
+  AuditIntegrityCheckpointRecord,
+  AuditIntegrityCheckpointRunResponse,
+  AuditIntegrityCheckpointVerifyResponse,
+  AuditIntegrityStatus,
+  AuditIntegrityVerifyResponse,
   AuditExportConfig,
   AuditExportRunResponse,
   AuditExportStatus,
   ApprovalRequest,
   AuditEvent,
+  CSRFTokenResponse,
   CurrentUser,
   DemoScenarioResponse,
   DashboardOverview,
   JobRecord,
   LoginPayload,
+  LogoutResponse,
   OIDCConfigStatus,
+  OnboardingActionResponse,
+  OnboardingStatus,
   Policy,
   RetentionPurgeResponse,
   RetentionStatus,
+  ScheduledTask,
+  ScheduledTaskRunResponse,
+  SettingsOverview,
   TokenResponse,
+  ToolSafeSummary,
+  ToolSafeDetail,
+  ToolSafeMetadataCreateInput,
+  ToolSafeMetadataUpdateInput,
   ToolCall,
   Trace,
+  UserRecord,
 } from "@/types/api";
+
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 
 export class ApiError extends Error {
   status: number;
@@ -50,15 +79,24 @@ async function request<T>(
   options: RequestInit & { token?: string | null; skipAuthRedirect?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(options.headers);
+  const method = (options.method || "GET").toUpperCase();
+  const useCookieSession = isCookieSessionToken(options.token);
   if (options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  if (options.token) {
+  if (options.token && !useCookieSession) {
     headers.set("Authorization", `Bearer ${options.token}`);
+  }
+  if (useCookieSession && !SAFE_METHODS.has(method)) {
+    const csrfToken = (await ensureCsrfToken()) || null;
+    if (csrfToken) {
+      headers.set(CSRF_HEADER_NAME, csrfToken);
+    }
   }
 
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
+    credentials: "include",
     headers,
   });
 
@@ -72,6 +110,9 @@ async function request<T>(
       requestId: errorPayload?.error?.request_id || response.headers.get("X-Request-ID"),
       extra: errorPayload?.error?.extra || null,
     });
+    if (useCookieSession && (error.code === "csrf_invalid" || error.code === "csrf_required")) {
+      clearStoredCsrfToken();
+    }
     if (!options.skipAuthRedirect && response.status === 401 && typeof window !== "undefined") {
       clearSession();
       window.location.assign("/login?reason=session-expired");
@@ -80,6 +121,28 @@ async function request<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function ensureCsrfToken(): Promise<string | null> {
+  const stored = getStoredCsrfToken();
+  if (stored) {
+    return stored;
+  }
+
+  const response = await fetch(`${apiBaseUrl}/v1/auth/csrf-token`, {
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const payload = (await response.json()) as CSRFTokenResponse;
+  if (payload.csrf_token) {
+    setStoredCsrfToken(payload.csrf_token);
+  }
+  return payload.csrf_token;
 }
 
 export class AgentGateApiClient {
@@ -105,20 +168,132 @@ export class AgentGateApiClient {
     });
   }
 
-  async getCurrentUser(token: string): Promise<CurrentUser> {
+  async getCurrentUser(token: string | null = COOKIE_SESSION_TOKEN): Promise<CurrentUser> {
     return request<CurrentUser>("/v1/auth/me", { token });
+  }
+
+  async getCsrfToken(): Promise<CSRFTokenResponse> {
+    const response = await request<CSRFTokenResponse>("/v1/auth/csrf-token", {
+      token: COOKIE_SESSION_TOKEN,
+      skipAuthRedirect: true,
+    });
+    if (response.csrf_token) {
+      setStoredCsrfToken(response.csrf_token);
+    }
+    return response;
+  }
+
+  async logout(token: string | null = COOKIE_SESSION_TOKEN): Promise<LogoutResponse> {
+    return request<LogoutResponse>("/v1/auth/logout", {
+      method: "POST",
+      token,
+      skipAuthRedirect: true,
+      body: JSON.stringify({}),
+    });
   }
 
   async getDashboardOverview(token: string): Promise<DashboardOverview> {
     return request<DashboardOverview>("/v1/dashboard/overview", { token });
   }
 
+  async getOnboardingStatus(token: string): Promise<OnboardingStatus> {
+    return request<OnboardingStatus>("/v1/onboarding/status", { token });
+  }
+
+  async dismissOnboarding(token: string): Promise<OnboardingActionResponse> {
+    return request<OnboardingActionResponse>("/v1/onboarding/dismiss", {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
+  }
+
+  async resetOnboarding(token: string): Promise<OnboardingActionResponse> {
+    return request<OnboardingActionResponse>("/v1/onboarding/reset", {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
+  }
+
+  async createOnboardingDemoPolicy(token: string): Promise<OnboardingActionResponse> {
+    return request<OnboardingActionResponse>("/v1/onboarding/demo-policy", {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
+  }
+
   async listAgents(token: string): Promise<Agent[]> {
     return request<Agent[]>("/v1/agents", { token });
   }
 
+  async listToolSummaries(token: string): Promise<ToolSafeSummary[]> {
+    return request<ToolSafeSummary[]>("/v1/tools/summary", { token });
+  }
+
+  async getToolSafeDetail(token: string, toolId: string): Promise<ToolSafeDetail> {
+    return request<ToolSafeDetail>(`/v1/tools/${toolId}/safe-detail`, { token });
+  }
+
+  async createToolSafeMetadata(token: string, payload: ToolSafeMetadataCreateInput): Promise<ToolSafeDetail> {
+    return request<ToolSafeDetail>("/v1/tools/safe-metadata", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateToolSafeMetadata(
+    token: string,
+    toolId: string,
+    payload: ToolSafeMetadataUpdateInput,
+  ): Promise<ToolSafeDetail> {
+    return request<ToolSafeDetail>(`/v1/tools/${toolId}/safe-metadata`, {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async probeToolHealth(token: string, toolId: string): Promise<ToolSafeSummary> {
+    return request<ToolSafeSummary>(`/v1/tools/${toolId}/probe-health`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
+  }
+
   async getAgent(token: string, agentId: string): Promise<Agent> {
     return request<Agent>(`/v1/agents/${agentId}`, { token });
+  }
+
+  async listAgentApiKeys(token: string, agentId: string): Promise<AgentAPIKeySummary[]> {
+    return request<AgentAPIKeySummary[]>(`/v1/agents/${agentId}/api-keys`, { token });
+  }
+
+  async createAgentApiKey(
+    token: string,
+    agentId: string,
+    payload: {
+      name: string;
+      expires_in_days: number | null;
+      scopes: Array<"gateway:invoke">;
+    },
+  ): Promise<AgentAPIKeyResponse> {
+    return request<AgentAPIKeyResponse>(`/v1/agents/${agentId}/api-keys`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async revokeAgentApiKey(token: string, agentId: string, apiKeyId: string): Promise<{ message: string }> {
+    return request<{ message: string }>(`/v1/agents/${agentId}/api-keys/${apiKeyId}/revoke`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
   }
 
   async suspendAgent(token: string, agentId: string): Promise<Agent> {
@@ -169,9 +344,27 @@ export class AgentGateApiClient {
       name: string;
       description: string;
       enabled: boolean;
-      severity: string;
-      decision: string;
-      conditions: { match: "all" | "any"; rules: Array<{ field: string; operator: string; value: string | number | boolean }> };
+      severity: "low" | "medium" | "high" | "critical";
+      decision: "allow" | "block" | "require_approval" | "redact";
+      conditions: {
+        match: "all" | "any";
+        rules: Array<{
+          field:
+            | "tool_name"
+            | "action_name"
+            | "recipient_domain"
+            | "repo_trust"
+            | "data_classification"
+            | "risk_score"
+            | "environment"
+            | "amount"
+            | "discount_percent"
+            | "row_count"
+            | "intent_mismatch";
+          operator: "equals" | "contains" | "greater_than";
+          value: string | number | boolean;
+        }>;
+      };
     },
   ) {
     return request<Policy>("/v1/policies", {
@@ -181,7 +374,35 @@ export class AgentGateApiClient {
     });
   }
 
-  async updatePolicy(token: string, policyId: string, updates: Partial<Policy>) {
+  async updatePolicy(
+    token: string,
+    policyId: string,
+    updates: {
+      description?: string;
+      enabled?: boolean;
+      severity?: "low" | "medium" | "high" | "critical";
+      decision?: "allow" | "block" | "require_approval" | "redact";
+      conditions?: {
+        match: "all" | "any";
+        rules: Array<{
+          field:
+            | "tool_name"
+            | "action_name"
+            | "recipient_domain"
+            | "repo_trust"
+            | "data_classification"
+            | "risk_score"
+            | "environment"
+            | "amount"
+            | "discount_percent"
+            | "row_count"
+            | "intent_mismatch";
+          operator: "equals" | "contains" | "greater_than";
+          value: string | number | boolean;
+        }>;
+      };
+    },
+  ) {
     return request<Policy>(`/v1/policies/${policyId}`, {
       method: "PUT",
       token,
@@ -207,6 +428,56 @@ export class AgentGateApiClient {
 
   async listAuditExports(token: string): Promise<AuditExportConfig[]> {
     return request<AuditExportConfig[]>("/v1/audit-exports", { token });
+  }
+
+  async updateAuditExport(
+    token: string,
+    configId: string,
+    payload: { enabled?: boolean },
+  ): Promise<AuditExportConfig> {
+    return request<AuditExportConfig>(`/v1/audit-exports/${configId}`, {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getAuditIntegrityStatus(token: string): Promise<AuditIntegrityStatus> {
+    return request<AuditIntegrityStatus>("/v1/audit-integrity/status", { token });
+  }
+
+  async verifyAuditIntegrity(token: string): Promise<AuditIntegrityVerifyResponse> {
+    return request<AuditIntegrityVerifyResponse>("/v1/audit-integrity/verify", {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
+  }
+
+  async listAuditIntegrityCheckpoints(token: string): Promise<AuditIntegrityCheckpointRecord[]> {
+    return request<AuditIntegrityCheckpointRecord[]>("/v1/audit-integrity/checkpoints", { token });
+  }
+
+  async createAuditIntegrityCheckpoint(token: string): Promise<AuditIntegrityCheckpointRunResponse> {
+    return request<AuditIntegrityCheckpointRunResponse>("/v1/audit-integrity/checkpoints", {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
+    });
+  }
+
+  async verifyAuditIntegrityCheckpoint(
+    token: string,
+    checkpointId: string,
+  ): Promise<AuditIntegrityCheckpointVerifyResponse> {
+    return request<AuditIntegrityCheckpointVerifyResponse>(
+      `/v1/audit-integrity/checkpoints/${checkpointId}/verify`,
+      {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      },
+    );
   }
 
   async getAuditExportStatus(token: string, configId: string): Promise<AuditExportStatus> {
@@ -243,6 +514,69 @@ export class AgentGateApiClient {
       method: "POST",
       token,
       body: JSON.stringify(payload),
+    });
+  }
+
+  async listScheduledTasks(token: string): Promise<ScheduledTask[]> {
+    return request<ScheduledTask[]>("/v1/scheduled-tasks", { token });
+  }
+
+  async listUsers(token: string): Promise<UserRecord[]> {
+    return request<UserRecord[]>("/v1/users", { token });
+  }
+
+  async getUser(token: string, userId: string): Promise<UserRecord> {
+    return request<UserRecord>(`/v1/users/${userId}`, { token });
+  }
+
+  async updateUser(
+    token: string,
+    userId: string,
+    payload: { full_name?: string; role?: string },
+  ): Promise<UserRecord> {
+    return request<UserRecord>(`/v1/users/${userId}`, {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deactivateUser(token: string, userId: string, reason?: string): Promise<UserRecord> {
+    return request<UserRecord>(`/v1/users/${userId}/deactivate`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  }
+
+  async reactivateUser(token: string, userId: string): Promise<UserRecord> {
+    return request<UserRecord>(`/v1/users/${userId}/reactivate`, {
+      method: "POST",
+      token,
+    });
+  }
+
+  async getSettingsOverview(token: string): Promise<SettingsOverview> {
+    return request<SettingsOverview>("/v1/settings/overview", { token });
+  }
+
+  async updateScheduledTask(
+    token: string,
+    taskId: string,
+    payload: { enabled?: boolean },
+  ): Promise<ScheduledTask> {
+    return request<ScheduledTask>(`/v1/scheduled-tasks/${taskId}`, {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async runScheduledTaskNow(token: string, taskId: string): Promise<ScheduledTaskRunResponse> {
+    return request<ScheduledTaskRunResponse>(`/v1/scheduled-tasks/${taskId}/run-now`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({}),
     });
   }
 
