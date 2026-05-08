@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from threading import Lock
 from time import time
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
 import httpx
 import jwt

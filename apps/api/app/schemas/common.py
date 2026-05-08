@@ -6,18 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.enums import (
-    AgentEnvironment,
-    AgentStatus,
-    ApprovalStatus,
     AuditActorType,
-    PolicyDecision,
-    PolicySeverity,
-    RiskBand,
-    ToolCallStatus,
-    ToolType,
-    TraceStatus,
-    TraceStepType,
-    UserRole,
 )
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from sqlalchemy import text
-from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import engine

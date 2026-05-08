@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
 
 from app.core.enums import AuditActorType
 from app.schemas.common import ORMModel

@@ -782,22 +782,26 @@ class ScheduledTaskService:
     ) -> datetime:
         now = _normalize_datetime(base_time)
         if schedule_kind == ScheduledTaskScheduleKind.INTERVAL:
-            assert interval_seconds is not None
+            if interval_seconds is None:
+                raise ValueError("interval_seconds is required for interval schedules")
             return now + timedelta(seconds=interval_seconds)
-        assert cron_expression is not None
+        if cron_expression is None:
+            raise ValueError("cron_expression is required for cron schedules")
         return _next_cron_occurrence(cron_expression, after=now)
 
     def _advance_next_run_at(self, task: ScheduledTask, *, now: datetime) -> datetime:
         current = _normalize_datetime(task.next_run_at)
         effective_now = _normalize_datetime(now)
         if task.schedule_kind == ScheduledTaskScheduleKind.INTERVAL:
-            assert task.interval_seconds is not None
+            if task.interval_seconds is None:
+                raise ValueError("interval_seconds is required for interval schedules")
             interval = timedelta(seconds=task.interval_seconds)
             next_run_at = current + interval
             while next_run_at <= effective_now:
                 next_run_at += interval
             return next_run_at
-        assert task.cron_expression is not None
+        if task.cron_expression is None:
+            raise ValueError("cron_expression is required for cron schedules")
         return _next_cron_occurrence(
             task.cron_expression,
             after=effective_now if effective_now > current else current,

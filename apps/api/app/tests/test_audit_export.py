@@ -8,11 +8,10 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.enums import AuditActorType, JobStatus
-from app.models import AuditEvent, AuditExportConfig, Job
+from app.models import AuditEvent, Job
 from app.services.audit_export_service import (
     AUDIT_EXPORT_RUN_FAILED_EVENT,
     AUDIT_EXPORT_RUN_RETRY_EXHAUSTED_EVENT,
-    AUDIT_EXPORT_RUN_SUCCEEDED_EVENT,
     AuditExportDispatcher,
 )
 from app.services.audit_service import AuditService

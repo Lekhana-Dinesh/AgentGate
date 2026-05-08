@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.core.enums import AuditActorType, JobStatus, JobType
-from app.models import AuditEvent, Job, Worker
+from app.core.enums import JobStatus, JobType
+from app.models import AuditEvent, Worker
 from app.models.base import utcnow
 from app.services.job_service import (
     JOB_DEAD_LETTERED_EVENT,

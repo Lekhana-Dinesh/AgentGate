@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import timezone
 from typing import Callable
 
-from fastapi import Depends, Header, Request, status
+from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 

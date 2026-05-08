@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.core.enums import ApprovalStatus, AuditActorType, UserRole
 from app.core.errors import AppError
 from app.db.session import get_db

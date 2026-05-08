@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.enums import AuditActorType, AuditExportDestinationType, JobStatus, JobType
-from app.models import AuditExportConfig, Job, ScheduledTask
+from app.models import AuditExportConfig, Job
 from app.models.base import utcnow
 from app.schemas.scheduled_task import ScheduledTaskCreate
 from app.services.scheduled_task_service import (

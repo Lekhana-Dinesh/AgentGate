@@ -385,7 +385,7 @@ class JobService:
             db.rollback()
             wrapped = JobProcessingError(detail=exc.detail, code=exc.code, retryable=False)
             return self._handle_job_error(db, job_id=job_id, exc=wrapped, raise_on_error=raise_on_error)
-        except Exception as exc:  # pragma: no cover - fail-closed safeguard
+        except Exception:  # pragma: no cover - fail-closed safeguard
             db.rollback()
             wrapped = JobProcessingError(
                 detail="Job handler failed unexpectedly.",

@@ -11,7 +11,7 @@ from app.core.enums import (
     AuditIntegrityCheckpointType,
     JobStatus,
 )
-from app.models import AuditIntegrityCheckpoint, Job
+from app.models import AuditIntegrityCheckpoint
 from app.schemas.audit_integrity import AuditIntegrityCheckpointVerifyResponse
 from app.services.audit_integrity_checkpoint_service import AuditIntegrityCheckpointService
 from app.services.audit_service import AuditService

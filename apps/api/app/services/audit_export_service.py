@@ -4,7 +4,6 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import and_, or_, select
@@ -30,7 +29,7 @@ from app.schemas.audit_export import (
     AuditExportStatusResponse,
     AuditExportUpdate,
 )
-from app.schemas.job import serialize_job, serialize_job_summary
+from app.schemas.job import serialize_job_summary
 from app.security.secret_references import (
     SecretResolutionError,
     build_env_secret_reference,

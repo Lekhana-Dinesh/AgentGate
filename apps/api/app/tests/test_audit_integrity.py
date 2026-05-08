@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 import httpx
-from sqlalchemy import select
 
 from app.core.enums import AuditActorType
 from app.models import AuditEvent
