@@ -1,0 +1,114 @@
+# AgentGate API evaluation collection for cookie-mode sessions.
+# Safe order:
+# 1. Run health, ready, login, and csrf-token.
+# 2. Copy csrf_token into AGENTGATE_CSRF_TOKEN if your HTTP client does not chain it.
+# 3. Keep using the same cookie-aware client session for the remaining requests.
+
+### API Health
+GET {{AGENTGATE_API_URL}}/health
+Accept: application/json
+
+### API Readiness
+GET {{AGENTGATE_API_URL}}/ready
+Accept: application/json
+
+### Web Login Page
+GET {{AGENTGATE_WEB_URL}}/login
+Accept: text/html
+
+### Login
+# Expected for AGENTGATE_AUTH_SESSION_MODE=cookie.
+POST {{AGENTGATE_API_URL}}/v1/auth/login
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "{{AGENTGATE_EMAIL}}",
+  "password": "{{AGENTGATE_PASSWORD}}",
+  "tenant_slug": "{{AGENTGATE_TENANT_SLUG}}"
+}
+
+### CSRF Token
+GET {{AGENTGATE_API_URL}}/v1/auth/csrf-token
+Accept: application/json
+
+### Current User
+GET {{AGENTGATE_API_URL}}/v1/auth/me
+Accept: application/json
+
+### Settings Overview
+GET {{AGENTGATE_API_URL}}/v1/settings/overview
+Accept: application/json
+
+### Onboarding Status
+GET {{AGENTGATE_API_URL}}/v1/onboarding/status
+Accept: application/json
+
+### Tools Summary
+GET {{AGENTGATE_API_URL}}/v1/tools/summary
+Accept: application/json
+
+### Seeded Demo Scenario
+# Optional. Safe local evaluation helper for traces, approvals, jobs, and audit surfaces.
+POST {{AGENTGATE_API_URL}}/v1/demo/run-sales-agent-risk-scenario
+X-CSRF-Token: {{AGENTGATE_CSRF_TOKEN}}
+Accept: application/json
+
+### Approvals List
+GET {{AGENTGATE_API_URL}}/v1/approvals
+Accept: application/json
+
+### Jobs List
+GET {{AGENTGATE_API_URL}}/v1/jobs
+Accept: application/json
+
+### Scheduled Tasks List
+GET {{AGENTGATE_API_URL}}/v1/scheduled-tasks
+Accept: application/json
+
+### Audit Integrity Status
+GET {{AGENTGATE_API_URL}}/v1/audit-integrity/status
+Accept: application/json
+
+### Audit Integrity Verify
+POST {{AGENTGATE_API_URL}}/v1/audit-integrity/verify
+X-CSRF-Token: {{AGENTGATE_CSRF_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{}
+
+### Audit Checkpoints List
+GET {{AGENTGATE_API_URL}}/v1/audit-integrity/checkpoints
+Accept: application/json
+
+### Create Audit Checkpoint
+POST {{AGENTGATE_API_URL}}/v1/audit-integrity/checkpoints
+X-CSRF-Token: {{AGENTGATE_CSRF_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{}
+
+### Audit Exports List
+GET {{AGENTGATE_API_URL}}/v1/audit-exports
+Accept: application/json
+
+### Retention Status
+GET {{AGENTGATE_API_URL}}/v1/retention/status
+Accept: application/json
+
+### Retention Dry Run
+POST {{AGENTGATE_API_URL}}/v1/retention/purge
+X-CSRF-Token: {{AGENTGATE_CSRF_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "dry_run": true,
+  "limit": 10
+}
+
+### Users List
+GET {{AGENTGATE_API_URL}}/v1/users
+Accept: application/json

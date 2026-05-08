@@ -1,0 +1,198 @@
+# AgentGate API evaluation collection for token-mode sessions.
+# Safe order:
+# 1. Run health, ready, and login.
+# 2. Copy access_token from login into AGENTGATE_ACCESS_TOKEN.
+# 3. Run settings, onboarding, tools, jobs, and audit endpoints.
+# 4. Optional manual requests require AGENTGATE_AGENT_ID, AGENTGATE_USER_ID,
+#    AGENTGATE_JOB_ID, AGENTGATE_TASK_ID, or AGENTGATE_CHECKPOINT_ID.
+
+### API Health
+GET {{AGENTGATE_API_URL}}/health
+Accept: application/json
+
+### API Readiness
+GET {{AGENTGATE_API_URL}}/ready
+Accept: application/json
+
+### Web Login Page
+GET {{AGENTGATE_WEB_URL}}/login
+Accept: text/html
+
+### Login
+# Expected for AGENTGATE_AUTH_SESSION_MODE=token.
+# In cookie mode, use operator-evaluation-cookie.http instead.
+POST {{AGENTGATE_API_URL}}/v1/auth/login
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "{{AGENTGATE_EMAIL}}",
+  "password": "{{AGENTGATE_PASSWORD}}",
+  "tenant_slug": "{{AGENTGATE_TENANT_SLUG}}"
+}
+
+### Current User
+GET {{AGENTGATE_API_URL}}/v1/auth/me
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Settings Overview
+GET {{AGENTGATE_API_URL}}/v1/settings/overview
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Onboarding Status
+GET {{AGENTGATE_API_URL}}/v1/onboarding/status
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Tools Summary
+GET {{AGENTGATE_API_URL}}/v1/tools/summary
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Agents List
+GET {{AGENTGATE_API_URL}}/v1/agents
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Users List
+GET {{AGENTGATE_API_URL}}/v1/users
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Seeded Demo Scenario
+# Safe local evaluation helper. This seeds approvals, jobs, traces, and audit data
+# without requiring GitHub, Jira, MCP, Slack, or AWS actions.
+POST {{AGENTGATE_API_URL}}/v1/demo/run-sales-agent-risk-scenario
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Gateway Tool Call Example
+# Manual only. Set AGENTGATE_AGENT_ID and AGENTGATE_USER_ID from the Agents and Users
+# list responses first. This uses the demo-safe mock email path and is expected to
+# route into approval in the seeded scenario.
+POST {{AGENTGATE_API_URL}}/v1/gateway/tool-call
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "agent_id": "{{AGENTGATE_AGENT_ID}}",
+  "user_id": "{{AGENTGATE_USER_ID}}",
+  "original_intent": "Prepare and send a renewal proposal to Acme Corp.",
+  "tool_name": "Email",
+  "action_name": "send_external_email",
+  "arguments": {
+    "recipient": "buyer@acme.com",
+    "attachment": "internal_pricing_sheet.xlsx"
+  },
+  "data_classifications": [
+    "internal_pricing",
+    "customer_data"
+  ],
+  "metadata": {
+    "source": "api-evaluation-collection"
+  }
+}
+
+### Gateway Tool Calls
+GET {{AGENTGATE_API_URL}}/v1/gateway/tool-calls
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Approvals List
+GET {{AGENTGATE_API_URL}}/v1/approvals
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Jobs List
+GET {{AGENTGATE_API_URL}}/v1/jobs
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Job Detail
+# Manual only. Set AGENTGATE_JOB_ID from the Jobs list response first.
+GET {{AGENTGATE_API_URL}}/v1/jobs/{{AGENTGATE_JOB_ID}}
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Scheduled Tasks List
+GET {{AGENTGATE_API_URL}}/v1/scheduled-tasks
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Run Scheduled Task Now
+# Manual only. Use only for internal verification tasks such as audit_integrity_verify
+# or audit_integrity_checkpoint. Do not use this against external-connector tasks during
+# a shared evaluation.
+POST {{AGENTGATE_API_URL}}/v1/scheduled-tasks/{{AGENTGATE_TASK_ID}}/run-now
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Audit Integrity Status
+GET {{AGENTGATE_API_URL}}/v1/audit-integrity/status
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Audit Integrity Verify
+POST {{AGENTGATE_API_URL}}/v1/audit-integrity/verify
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{}
+
+### Audit Checkpoints List
+GET {{AGENTGATE_API_URL}}/v1/audit-integrity/checkpoints
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Create Audit Checkpoint
+# Safe evaluation action. This enqueues checkpoint work and does not claim immutability
+# unless your deployment uses real WORM or Object Lock controls externally.
+POST {{AGENTGATE_API_URL}}/v1/audit-integrity/checkpoints
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{}
+
+### Audit Checkpoint Detail
+# Manual only. Set AGENTGATE_CHECKPOINT_ID from the checkpoint list response first.
+GET {{AGENTGATE_API_URL}}/v1/audit-integrity/checkpoints/{{AGENTGATE_CHECKPOINT_ID}}
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Audit Checkpoint Verify
+# Manual only. Set AGENTGATE_CHECKPOINT_ID from the checkpoint list response first.
+POST {{AGENTGATE_API_URL}}/v1/audit-integrity/checkpoints/{{AGENTGATE_CHECKPOINT_ID}}/verify
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Audit Exports List
+GET {{AGENTGATE_API_URL}}/v1/audit-exports
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Retention Status
+GET {{AGENTGATE_API_URL}}/v1/retention/status
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Accept: application/json
+
+### Retention Dry Run
+POST {{AGENTGATE_API_URL}}/v1/retention/purge
+Authorization: Bearer {{AGENTGATE_ACCESS_TOKEN}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "dry_run": true,
+  "limit": 10
+}
+
+### SCIM Disabled Or Unauthorized Example
+# Expect 401 or 404 depending whether SCIM is disabled or simply not authorized.
+GET {{AGENTGATE_API_URL}}/v1/scim/v2/Users
+Authorization: Bearer disabled-eval-token
+Accept: application/json

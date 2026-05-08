@@ -1,0 +1,250 @@
+{
+  "pack_name": "pilot-default",
+  "pack_version": "2026-05-07",
+  "description": "Conservative starter policies for a controlled AgentGate design-partner pilot. Review connector allowlists, trust classifications, and approval staffing before enabling pilot traffic.",
+  "recommended_scope": [
+    "GitHub-first governed workflows",
+    "Jira optional with narrow allowlists",
+    "MCP disabled by default unless the server is internal and tightly allowlisted"
+  ],
+  "policies": [
+    {
+      "name": "Block confidential data to external recipients",
+      "description": "Blocks confidential data classes from being routed to external recipients during pilot workflows.",
+      "enabled": true,
+      "severity": "critical",
+      "decision": "block",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "recipient_domain", "operator": "equals", "value": "external" },
+          { "field": "data_classification", "operator": "contains", "value": "confidential" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for intent mismatch on external action",
+      "description": "Routes external actions for review when deterministic intent checks detect a mismatch.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "recipient_domain", "operator": "equals", "value": "external" },
+          { "field": "intent_mismatch", "operator": "equals", "value": true }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for demo external email in production",
+      "description": "Routes mock or demo external email sends for review when production-like agents are in use.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "Email" },
+          { "field": "action_name", "operator": "contains", "value": "send" },
+          { "field": "recipient_domain", "operator": "equals", "value": "external" },
+          { "field": "environment", "operator": "equals", "value": "production" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for GitHub public comments",
+      "description": "Routes GitHub comments for review when they target public or external repositories.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "GitHub" },
+          { "field": "action_name", "operator": "contains", "value": "comment" },
+          { "field": "repo_trust", "operator": "equals", "value": "public" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for GitHub customer visible comments",
+      "description": "Routes customer-visible GitHub comments for review even when the repository trust hint is incomplete.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "GitHub" },
+          { "field": "action_name", "operator": "contains", "value": "comment" },
+          { "field": "data_classification", "operator": "contains", "value": "customer_visible" }
+        ]
+      }
+    },
+    {
+      "name": "Block confidential GitHub public comments",
+      "description": "Blocks public GitHub comments that contain confidential data classifications.",
+      "enabled": true,
+      "severity": "critical",
+      "decision": "block",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "GitHub" },
+          { "field": "action_name", "operator": "contains", "value": "comment" },
+          { "field": "repo_trust", "operator": "equals", "value": "public" },
+          { "field": "data_classification", "operator": "contains", "value": "confidential" },
+          { "field": "data_classification", "operator": "contains", "value": "public_comment_body" }
+        ]
+      }
+    },
+    {
+      "name": "Block GitHub destructive actions",
+      "description": "Blocks destructive GitHub actions until the platform adds explicit support and review paths.",
+      "enabled": true,
+      "severity": "critical",
+      "decision": "block",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "GitHub" },
+          { "field": "action_name", "operator": "contains", "value": "delete" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for GitHub issues in production",
+      "description": "Routes GitHub issue creation for production-like agents through human review.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "GitHub" },
+          { "field": "action_name", "operator": "equals", "value": "create_issue" },
+          { "field": "environment", "operator": "equals", "value": "production" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for Jira production transitions",
+      "description": "Routes Jira workflow transitions for production-like agents through human review.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "Jira" },
+          { "field": "action_name", "operator": "contains", "value": "transition" },
+          { "field": "environment", "operator": "equals", "value": "production" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for Jira customer visible comments",
+      "description": "Routes customer-visible Jira comments through human review.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "Jira" },
+          { "field": "action_name", "operator": "contains", "value": "comment" },
+          { "field": "data_classification", "operator": "contains", "value": "customer_visible" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for Jira external project comments",
+      "description": "Routes Jira comments for external or customer-facing projects through human review.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "Jira" },
+          { "field": "action_name", "operator": "contains", "value": "comment" },
+          { "field": "data_classification", "operator": "contains", "value": "external_project" }
+        ]
+      }
+    },
+    {
+      "name": "Block confidential Jira comments",
+      "description": "Blocks confidential data classes from being posted into Jira comments.",
+      "enabled": true,
+      "severity": "critical",
+      "decision": "block",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "Jira" },
+          { "field": "action_name", "operator": "contains", "value": "comment" },
+          { "field": "data_classification", "operator": "contains", "value": "confidential" }
+        ]
+      }
+    },
+    {
+      "name": "Block Jira destructive actions",
+      "description": "Blocks destructive Jira actions until the platform adds explicit support and review paths.",
+      "enabled": true,
+      "severity": "critical",
+      "decision": "block",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "Jira" },
+          { "field": "action_name", "operator": "contains", "value": "delete" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for external MCP tools",
+      "description": "Routes external MCP tool calls through human review.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "MCP" },
+          { "field": "action_name", "operator": "equals", "value": "call_tool" },
+          { "field": "recipient_domain", "operator": "equals", "value": "external" }
+        ]
+      }
+    },
+    {
+      "name": "Require approval for side-effecting MCP tools",
+      "description": "Routes write-capable MCP tool calls through human review.",
+      "enabled": true,
+      "severity": "high",
+      "decision": "require_approval",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "MCP" },
+          { "field": "action_name", "operator": "equals", "value": "call_tool" },
+          { "field": "data_classification", "operator": "contains", "value": "remote_tool_side_effect" }
+        ]
+      }
+    },
+    {
+      "name": "Block dangerous MCP tool names",
+      "description": "Blocks dangerous MCP tool names and patterns such as shell, admin, execute, delete, or transfer until they are explicitly modeled and approved.",
+      "enabled": true,
+      "severity": "critical",
+      "decision": "block",
+      "conditions": {
+        "match": "all",
+        "rules": [
+          { "field": "tool_name", "operator": "equals", "value": "MCP" },
+          { "field": "data_classification", "operator": "contains", "value": "dangerous_remote_tool_name" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# AgentGate Prometheus starter configuration.
+#
+# Keep /metrics on an internal-only network path behind firewall, reverse-proxy,
+# or service-mesh policy. This file intentionally scrapes only the Prometheus
+# metrics endpoint. /health and /ready are JSON endpoints and should be probed
+# separately if you want availability or readiness alerting.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  scrape_timeout: 5s
+  external_labels:
+    service: agentgate
+    environment: self-hosted-example
+
+rule_files:
+  - alert-rules.yml
+
+scrape_configs:
+  - job_name: agentgate-api
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:8000
+        labels:
+          deployment: primary
+

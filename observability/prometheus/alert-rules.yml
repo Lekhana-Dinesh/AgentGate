@@ -1,0 +1,125 @@
+# Example AgentGate alert rules.
+#
+# Thresholds are intentionally conservative starter values. Adjust them for your
+# own traffic, job mix, and incident tolerance.
+#
+# The readiness alert below expects a separate HTTP probe series such as
+# blackbox_exporter probing /ready. This repository does not ship a blackbox
+# exporter deployment.
+
+groups:
+  - name: agentgate-availability
+    rules:
+      - alert: AgentGateApiDown
+        expr: up{job="agentgate-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: agentgate
+        annotations:
+          summary: AgentGate API metrics scrape is down
+          description: Prometheus has not been able to scrape AgentGate /metrics for 5 minutes. Check the API process, reverse proxy, and network policy.
+
+      - alert: AgentGateReadinessFailing
+        expr: probe_success{job="agentgate-ready"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate readiness probe is failing
+          description: This example alert depends on a separate probe for /ready. Inspect the /ready JSON payload for database, keys, rate limiter, and integration readiness details.
+
+      - alert: AgentGateHigh5xxRate
+        expr: |
+          (
+            sum(rate(agentgate_http_requests_total{status_code=~"5.."}[10m]))
+            /
+            clamp_min(sum(rate(agentgate_http_requests_total[10m])), 0.001)
+          ) > 0.05
+          and
+          sum(rate(agentgate_http_requests_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate API 5xx rate is elevated
+          description: More than 5% of recent AgentGate requests are returning 5xx responses. Inspect request logs, database reachability, recent deploys, and worker or scheduler side effects.
+
+  - name: agentgate-jobs
+    rules:
+      - alert: AgentGateJobDeadLetterIncrease
+        expr: increase(agentgate_jobs_dead_letter_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate dead-letter or retry-exhausted jobs increased
+          description: One or more durable jobs entered dead-letter review in the last 15 minutes. Inspect the Jobs UI or API and worker logs before retrying anything with side effects.
+
+      - alert: AgentGateDeadLetterBacklogPresent
+        expr: sum(agentgate_jobs_dead_letter_current) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate has dead-lettered jobs waiting for review
+          description: Dead-lettered jobs remain present for more than 15 minutes. Review retry-exhausted and failed jobs, confirm root cause, and retry only when safe.
+
+      - alert: AgentGateStaleRecoverySpike
+        expr: sum(increase(agentgate_jobs_stale_recovered_total[15m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate stale job recovery activity spiked
+          description: Multiple running jobs were recovered from stale leases recently. Check worker stability, lease duration, crash loops, and long-running job behavior.
+
+      - alert: AgentGateNoActiveWorkers
+        expr: max(agentgate_workers_current{status="running"}) < 1 or absent(agentgate_workers_current{status="running"})
+        for: 10m
+        labels:
+          severity: critical
+          service: agentgate
+        annotations:
+          summary: AgentGate has no active workers
+          description: The metrics surface shows no running workers for 10 minutes. Check the worker process, Redis connectivity, and /v1/workers/status.
+
+  - name: agentgate-scheduler-and-rate-limits
+    rules:
+      - alert: AgentGateSchedulerErrors
+        expr: sum(increase(agentgate_scheduler_errors_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate scheduler is reporting errors
+          description: Scheduled task dispatch or scheduler loop errors occurred in the last 15 minutes. Inspect scheduler logs and scheduled-task configuration.
+
+      - alert: AgentGateRateLimiterBackendErrors
+        expr: sum(increase(agentgate_rate_limit_backend_errors_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate rate limiter backend errors detected
+          description: AgentGate is recording rate limiter backend failures. Check Redis connectivity and confirm whether protected routes are failing closed as expected.
+
+  - name: agentgate-exports
+    rules:
+      - alert: AgentGateAuditExportFailures
+        expr: sum(increase(agentgate_audit_export_runs_total{result="failure"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: agentgate
+        annotations:
+          summary: AgentGate audit export failures detected
+          description: One or more audit export runs failed in the last 15 minutes. Inspect export job records, destination credentials, and outbound network policy.
+
