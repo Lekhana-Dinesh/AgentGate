@@ -29,6 +29,7 @@ pnpm-debug.log*
 
 .venv/
 venv/
+*.egg-info/
 apps/api/.venv/
 apps/api/agentgate_api.egg-info/
 
