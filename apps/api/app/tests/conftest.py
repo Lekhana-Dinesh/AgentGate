@@ -22,16 +22,22 @@ from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.main import app
 from app.models import Agent, Policy, Tenant, Tool, User
+from app.security.key_management import get_key_provider
 from app.services.rate_limit_service import get_rate_limiter
+from app.tools.github_auth import GitHubAppAuthProvider
 
 
 @pytest.fixture(autouse=True)
 def reset_runtime_state():
     get_settings.cache_clear()
+    get_key_provider.cache_clear()
+    GitHubAppAuthProvider.clear_cache()
     get_rate_limiter().reset()
     get_metrics_registry().reset()
     yield
     get_settings.cache_clear()
+    get_key_provider.cache_clear()
+    GitHubAppAuthProvider.clear_cache()
     get_rate_limiter().reset()
     get_metrics_registry().reset()
 
@@ -85,7 +91,7 @@ def seeded_tenants(db_session):
 
     admin_a = User(
         tenant_id=tenant_a.id,
-        email="admin@tenant-a.local",
+        email="admin@tenant-a.example.com",
         full_name="Admin A",
         hashed_password=hash_password("AgentGate123!"),
         role=UserRole.ADMIN,
@@ -93,7 +99,7 @@ def seeded_tenants(db_session):
     )
     reviewer_a = User(
         tenant_id=tenant_a.id,
-        email="reviewer@tenant-a.local",
+        email="reviewer@tenant-a.example.com",
         full_name="Reviewer A",
         hashed_password=hash_password("AgentGate123!"),
         role=UserRole.SECURITY_REVIEWER,
@@ -101,7 +107,7 @@ def seeded_tenants(db_session):
     )
     approver_a = User(
         tenant_id=tenant_a.id,
-        email="approver@tenant-a.local",
+        email="approver@tenant-a.example.com",
         full_name="Approver A",
         hashed_password=hash_password("AgentGate123!"),
         role=UserRole.APPROVER,
@@ -109,7 +115,7 @@ def seeded_tenants(db_session):
     )
     developer_a = User(
         tenant_id=tenant_a.id,
-        email="developer@tenant-a.local",
+        email="developer@tenant-a.example.com",
         full_name="Developer A",
         hashed_password=hash_password("AgentGate123!"),
         role=UserRole.DEVELOPER,
@@ -117,7 +123,7 @@ def seeded_tenants(db_session):
     )
     viewer_a = User(
         tenant_id=tenant_a.id,
-        email="viewer@tenant-a.local",
+        email="viewer@tenant-a.example.com",
         full_name="Viewer A",
         hashed_password=hash_password("AgentGate123!"),
         role=UserRole.VIEWER,
@@ -125,7 +131,7 @@ def seeded_tenants(db_session):
     )
     admin_b = User(
         tenant_id=tenant_b.id,
-        email="admin@tenant-b.local",
+        email="admin@tenant-b.example.com",
         full_name="Admin B",
         hashed_password=hash_password("AgentGate123!"),
         role=UserRole.ADMIN,
@@ -142,8 +148,8 @@ def seeded_tenants(db_session):
         environment=AgentEnvironment.PRODUCTION,
         status=AgentStatus.ACTIVE,
         purpose="Prepare proposals",
-        allowed_tools=["Salesforce", "PricingDB", "Email", "Postgres", "GitHub"],
-        allowed_data_classes=["customer_data", "internal_pricing", "confidential", "financial"],
+        allowed_tools=["Salesforce", "PricingDB", "Email", "Postgres", "GitHub", "Jira", "MCP"],
+        allowed_data_classes=["customer_data", "internal_pricing", "confidential", "financial", "customer_visible", "external_project"],
         risk_level=RiskBand.HIGH,
     )
     agent_b = Agent(
@@ -179,6 +185,48 @@ def seeded_tenants(db_session):
                 "public_repositories": ["octocat/hello-world"],
                 "repository_allowlist": ["agentgate-labs/internal-agentgate", "octocat/hello-world"],
                 "max_read_retries": 2,
+                "retry_backoff_seconds": 0.0,
+            },
+            risk_level=RiskBand.HIGH,
+            enabled=True,
+        ),
+        Tool(
+            tenant_id=tenant_a.id,
+            name="Jira",
+            type=ToolType.JIRA,
+            description="Jira connector",
+            base_url="https://jira.example.test",
+            config={
+                "auth_mode": "env_token",
+                "token_env_var": "AGENTGATE_JIRA_TOKEN",
+                "project_allowlist": ["OPS", "SUPPORT"],
+                "issue_type_allowlist": ["task", "bug", "incident"],
+                "external_project_keys": ["SUPPORT"],
+                "transition_allowlist": ["done", "31"],
+                "assignee_allowlist": ["acct-support-1", "acct-oncall-1"],
+                "max_read_retries": 1,
+                "retry_backoff_seconds": 0.0,
+            },
+            risk_level=RiskBand.HIGH,
+            enabled=True,
+        ),
+        Tool(
+            tenant_id=tenant_a.id,
+            name="MCP",
+            type=ToolType.MCP,
+            description="Governed MCP connector",
+            base_url="https://mcp.example.test",
+            config={
+                "transport": "http",
+                "auth_mode": "bearer_env",
+                "token_env_var": "AGENTGATE_MCP_TOKEN",
+                "allowed_tool_names": ["knowledge_search", "ticket_comment", "shell_execute"],
+                "blocked_tool_names": ["delete_records"],
+                "max_request_bytes": 16384,
+                "max_response_bytes": 65536,
+                "timeout_ms": 5000,
+                "trust_domain": "internal",
+                "max_read_retries": 1,
                 "retry_backoff_seconds": 0.0,
             },
             risk_level=RiskBand.HIGH,
@@ -294,6 +342,73 @@ def seeded_tenants(db_session):
         ),
         Policy(
             tenant_id=tenant_a.id,
+            name="Require approval for Jira production transitions",
+            description="Production Jira transition control",
+            enabled=True,
+            severity=PolicySeverity.HIGH,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                    {"field": "action_name", "operator": "contains", "value": "transition"},
+                    {"field": "environment", "operator": "equals", "value": "production"},
+                ],
+            },
+            decision=PolicyDecision.REQUIRE_APPROVAL,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
+            name="Require approval for Jira customer visible comments",
+            description="Customer-visible Jira comment control",
+            enabled=True,
+            severity=PolicySeverity.HIGH,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                    {"field": "action_name", "operator": "contains", "value": "comment"},
+                    {"field": "data_classification", "operator": "contains", "value": "customer_visible"},
+                ],
+            },
+            decision=PolicyDecision.REQUIRE_APPROVAL,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
+            name="Block confidential Jira comments",
+            description="Blocks confidential data in Jira comments",
+            enabled=True,
+            severity=PolicySeverity.CRITICAL,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                    {"field": "action_name", "operator": "contains", "value": "comment"},
+                    {"field": "data_classification", "operator": "contains", "value": "confidential"},
+                ],
+            },
+            decision=PolicyDecision.BLOCK,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
+            name="Block Jira destructive actions",
+            description="Destructive Jira control",
+            enabled=True,
+            severity=PolicySeverity.CRITICAL,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "Jira"},
+                    {"field": "action_name", "operator": "contains", "value": "delete"},
+                ],
+            },
+            decision=PolicyDecision.BLOCK,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
             name="Require approval for GitHub issues in production",
             description="Production GitHub issue control",
             enabled=True,
@@ -307,6 +422,56 @@ def seeded_tenants(db_session):
                 ],
             },
             decision=PolicyDecision.REQUIRE_APPROVAL,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
+            name="Require approval for external MCP tools",
+            description="External MCP calls require human review.",
+            enabled=True,
+            severity=PolicySeverity.HIGH,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "MCP"},
+                    {"field": "action_name", "operator": "equals", "value": "call_tool"},
+                    {"field": "recipient_domain", "operator": "equals", "value": "external"},
+                ],
+            },
+            decision=PolicyDecision.REQUIRE_APPROVAL,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
+            name="Require approval for side-effecting MCP tools",
+            description="Write-capable MCP tools require approval before execution.",
+            enabled=True,
+            severity=PolicySeverity.HIGH,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "MCP"},
+                    {"field": "action_name", "operator": "equals", "value": "call_tool"},
+                    {"field": "data_classification", "operator": "contains", "value": "remote_tool_side_effect"},
+                ],
+            },
+            decision=PolicyDecision.REQUIRE_APPROVAL,
+            created_by=reviewer_a.id,
+        ),
+        Policy(
+            tenant_id=tenant_a.id,
+            name="Block dangerous MCP tool names",
+            description="Dangerous MCP tool names are blocked until explicitly reviewed and modeled.",
+            enabled=True,
+            severity=PolicySeverity.CRITICAL,
+            conditions={
+                "match": "all",
+                "rules": [
+                    {"field": "tool_name", "operator": "equals", "value": "MCP"},
+                    {"field": "data_classification", "operator": "contains", "value": "dangerous_remote_tool_name"},
+                ],
+            },
+            decision=PolicyDecision.BLOCK,
             created_by=reviewer_a.id,
         ),
     ]

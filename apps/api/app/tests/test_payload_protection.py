@@ -21,6 +21,9 @@ from app.tools.github_adapter import GitHubToolAdapter
 
 @pytest.fixture(autouse=True)
 def clear_payload_settings_cache(monkeypatch):
+    monkeypatch.delenv("AGENTGATE_AWS_REGION", raising=False)
+    monkeypatch.delenv("AGENTGATE_AWS_KMS_KEY_ID", raising=False)
+    monkeypatch.delenv("AGENTGATE_AWS_KMS_ENDPOINT_URL", raising=False)
     monkeypatch.delenv("AGENTGATE_PAYLOAD_ENCRYPTION_KEY", raising=False)
     monkeypatch.delenv("AGENTGATE_PAYLOAD_ENCRYPTION_KEY_SECRET_REF", raising=False)
     monkeypatch.delenv("AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF", raising=False)

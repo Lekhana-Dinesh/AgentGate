@@ -198,6 +198,8 @@ def test_webhook_audit_export_sends_sanitized_events(client, seeded_tenants, db_
     assert "__agentgate_encrypted__" not in serialized
     assert captured_payloads[0]["events"][0]["metadata"]["authorization"] == "[REDACTED]"
     assert captured_payloads[0]["events"][0]["metadata"]["execution_arguments"] == "[PROTECTED]"
+    assert captured_payloads[0]["events"][0]["integrity"]["event_hash"]
+    assert captured_payloads[0]["events"][0]["integrity"]["sequence_number"] == 1
 
 
 def test_audit_export_cursor_prevents_duplicate_exports(client, seeded_tenants, db_session, monkeypatch):
@@ -450,7 +452,20 @@ def test_secret_refs_fail_closed_for_audit_export_destinations(client, seeded_te
 
 
 def test_audit_export_endpoints_enforce_rbac(client, seeded_tenants):
+    admin_token = make_token(seeded_tenants["admin_a"])
+    reviewer_token = make_token(seeded_tenants["reviewer_a"])
+    developer_token = make_token(seeded_tenants["developer_a"])
     viewer_token = make_token(seeded_tenants["viewer_a"])
+    config = _create_export_config(
+        client,
+        admin_token,
+        {
+            "name": "Admin Export",
+            "destination_type": "webhook",
+            "enabled": True,
+            "endpoint_url": "https://siem.example.test/agentgate",
+        },
+    )
 
     list_response = client.get(
         "/v1/audit-exports",
@@ -466,6 +481,34 @@ def test_audit_export_endpoints_enforce_rbac(client, seeded_tenants):
             "endpoint_url": "https://siem.example.test/agentgate",
         },
     )
+    reviewer_list = client.get(
+        "/v1/audit-exports",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    )
+    reviewer_status = client.get(
+        f"/v1/audit-exports/{config['id']}/status",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    )
+    reviewer_update = client.patch(
+        f"/v1/audit-exports/{config['id']}",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+        json={"enabled": False},
+    )
+    reviewer_run = client.post(
+        f"/v1/audit-exports/{config['id']}/run",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+        json={"dry_run": True},
+    )
+    developer_run = client.post(
+        f"/v1/audit-exports/{config['id']}/run",
+        headers={"Authorization": f"Bearer {developer_token}"},
+        json={"dry_run": True},
+    )
 
     assert list_response.status_code == 403
     assert create_response.status_code == 403
+    assert reviewer_list.status_code == 200
+    assert reviewer_status.status_code == 200
+    assert reviewer_update.status_code == 403
+    assert reviewer_run.status_code == 403
+    assert developer_run.status_code == 403

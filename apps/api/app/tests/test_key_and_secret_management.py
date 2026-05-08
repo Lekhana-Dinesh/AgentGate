@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -17,10 +18,49 @@ from app.tests.conftest import make_token
 from app.tools.github_auth import EnvironmentTokenAuthProvider
 
 
+class _FakeKmsClient:
+    def __init__(self, *, fail_describe: bool = False) -> None:
+        self.fail_describe = fail_describe
+        self._ciphertexts: dict[bytes, tuple[bytes, dict[str, str]]] = {}
+        self.last_plaintext_key_material: str | None = None
+
+    def describe_key(self, *, KeyId: str) -> dict[str, object]:
+        if self.fail_describe:
+            raise RuntimeError("kms unavailable")
+        return {"KeyMetadata": {"KeyId": KeyId, "Enabled": True}}
+
+    def generate_data_key(
+        self,
+        *,
+        KeyId: str,
+        NumberOfBytes: int,
+        EncryptionContext: dict[str, str],
+    ) -> dict[str, object]:
+        plaintext = bytes(range(NumberOfBytes))
+        ciphertext = f"{KeyId}:{json.dumps(EncryptionContext, sort_keys=True)}".encode("utf-8")
+        self._ciphertexts[ciphertext] = (plaintext, dict(EncryptionContext))
+        self.last_plaintext_key_material = base64.urlsafe_b64encode(plaintext).decode("utf-8")
+        return {"Plaintext": plaintext, "CiphertextBlob": ciphertext}
+
+    def decrypt(
+        self,
+        *,
+        CiphertextBlob: bytes,
+        EncryptionContext: dict[str, str],
+    ) -> dict[str, object]:
+        plaintext, expected_context = self._ciphertexts[CiphertextBlob]
+        if expected_context != EncryptionContext:
+            raise RuntimeError("kms encryption context mismatch")
+        return {"Plaintext": plaintext}
+
+
 @pytest.fixture(autouse=True)
 def clear_key_management_caches(monkeypatch):
     for env_key in (
         "AGENTGATE_KEY_PROVIDER",
+        "AGENTGATE_AWS_REGION",
+        "AGENTGATE_AWS_KMS_KEY_ID",
+        "AGENTGATE_AWS_KMS_ENDPOINT_URL",
         "AGENTGATE_PAYLOAD_ENCRYPTION_KEY",
         "AGENTGATE_PAYLOAD_ENCRYPTION_KEY_SECRET_REF",
         "AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF",
@@ -29,6 +69,7 @@ def clear_key_management_caches(monkeypatch):
         "AGENTGATE_PAYLOAD_ENCRYPTION_ADDITIONAL_KEY_VERSIONS",
         "AGENTGATE_PAYLOAD_ENCRYPTION_KEY_PREVIOUS",
         "AGENTGATE_GITHUB_TOKEN",
+        "AGENTGATE_GITHUB_APP_PRIVATE_KEY",
         "AGENTGATE_SLACK_BOT_TOKEN",
         "AGENTGATE_TEST_OIDC_SECRET",
     ):
@@ -102,6 +143,60 @@ def test_additional_key_ref_can_decrypt_previous_envelopes(monkeypatch):
     }
 
     assert provider.decrypt(legacy_envelope) == "rotated-secret"
+
+
+def test_aws_kms_envelope_encrypts_and_decrypts_without_plaintext_key_leakage(monkeypatch):
+    fake_kms = _FakeKmsClient()
+    monkeypatch.setattr("app.security.key_management._build_aws_kms_client", lambda **_: fake_kms)
+    monkeypatch.setenv("AGENTGATE_KEY_PROVIDER", "aws_kms")
+    monkeypatch.setenv("AGENTGATE_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AGENTGATE_AWS_KMS_KEY_ID", "alias/agentgate/payload")
+    monkeypatch.setenv("AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF", "payload-kms-2026-05")
+    monkeypatch.setenv("AGENTGATE_PAYLOAD_ENCRYPTION_KEY_VERSION", "2026-05")
+    get_settings.cache_clear()
+    get_key_provider.cache_clear()
+
+    provider = LocalSymmetricPayloadEncryptionProvider()
+    envelope = provider.encrypt("demo-secret")
+
+    assert envelope[ENCRYPTED_MARKER] is True
+    assert envelope["provider"] == "aws_kms"
+    assert envelope["key_ref"] == "payload-kms-2026-05"
+    assert envelope["key_version"] == "2026-05"
+    assert envelope["encrypted_data_key"]
+    assert envelope["encrypted_data_key_algorithm"] == "aws-kms-generate-data-key"
+    assert fake_kms.last_plaintext_key_material is not None
+    assert fake_kms.last_plaintext_key_material not in json.dumps(envelope)
+    assert provider.decrypt(envelope) == "demo-secret"
+
+
+def test_aws_kms_provider_can_decrypt_legacy_env_envelope_when_additional_key_is_configured(monkeypatch):
+    fake_kms = _FakeKmsClient()
+    previous_key = Fernet.generate_key().decode("utf-8")
+    monkeypatch.setattr("app.security.key_management._build_aws_kms_client", lambda **_: fake_kms)
+    monkeypatch.setenv("AGENTGATE_KEY_PROVIDER", "aws_kms")
+    monkeypatch.setenv("AGENTGATE_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AGENTGATE_AWS_KMS_KEY_ID", "alias/agentgate/payload")
+    monkeypatch.setenv("AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF", "payload-kms-2026-05")
+    monkeypatch.setenv("AGENTGATE_PAYLOAD_ENCRYPTION_KEY_PREVIOUS", previous_key)
+    monkeypatch.setenv(
+        "AGENTGATE_PAYLOAD_ENCRYPTION_ADDITIONAL_KEYS",
+        json.dumps({"payload-env-2026-04": "env:AGENTGATE_PAYLOAD_ENCRYPTION_KEY_PREVIOUS"}),
+    )
+    get_settings.cache_clear()
+    get_key_provider.cache_clear()
+
+    ciphertext = Fernet(previous_key.encode("utf-8")).encrypt(b"legacy-secret").decode("utf-8")
+    provider = LocalSymmetricPayloadEncryptionProvider()
+    legacy_envelope = {
+        ENCRYPTED_MARKER: True,
+        "alg": "local-fernet-v1",
+        "ciphertext": ciphertext,
+        "key_ref": "payload-env-2026-04",
+        "provider": "env",
+    }
+
+    assert provider.decrypt(legacy_envelope) == "legacy-secret"
 
 
 def test_invalid_or_missing_active_key_fails_closed_outside_dev_test():
@@ -189,6 +284,35 @@ def test_key_status_endpoint_hides_sensitive_values(client, seeded_tenants, monk
     assert response.status_code == 200
     payload = response.json()
     assert payload["provider"] == "env"
+    assert payload["readiness"] == "ready"
     assert payload["purposes"][0]["active_key_ref"] == "payload-primary"
     assert payload["purposes"][0]["active_key_version"] == "2026-05"
     assert key not in response.text
+
+
+def test_key_status_endpoint_reports_aws_kms_safely(client, seeded_tenants, monkeypatch):
+    fake_kms = _FakeKmsClient()
+    monkeypatch.setattr("app.security.key_management._build_aws_kms_client", lambda **_: fake_kms)
+    monkeypatch.setenv("AGENTGATE_KEY_PROVIDER", "aws_kms")
+    monkeypatch.setenv("AGENTGATE_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AGENTGATE_AWS_KMS_KEY_ID", "alias/agentgate/payload")
+    monkeypatch.setenv("AGENTGATE_PAYLOAD_ENCRYPTION_ACTIVE_KEY_REF", "payload-kms-2026-05")
+    monkeypatch.setenv("AGENTGATE_PAYLOAD_ENCRYPTION_KEY_VERSION", "2026-05")
+    monkeypatch.setenv("AGENTGATE_AWS_KMS_ENDPOINT_URL", "http://localhost:4566")
+    get_settings.cache_clear()
+    get_key_provider.cache_clear()
+
+    token = make_token(seeded_tenants["admin_a"])
+    response = client.get(
+        "/v1/security/key-status",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "aws_kms"
+    assert payload["readiness"] == "ready"
+    assert payload["purposes"][0]["active_key_ref"] == "payload-kms-2026-05"
+    assert payload["purposes"][0]["region"] == "us-east-1"
+    assert "encrypted_data_key" not in response.text
+    assert fake_kms.last_plaintext_key_material is None

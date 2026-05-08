@@ -7,10 +7,12 @@ import pytest
 from sqlalchemy import select
 
 from app.api.routes import auth as auth_routes
-from app.core.enums import UserRole
+from app.core.config import get_settings
+from app.core.enums import UserProvisionedSource, UserRole
 from app.core.errors import AppError
 from app.core.security import hash_password
 from app.models import AuditEvent, Tenant, TenantOIDCConfig, User
+from app.security.browser_sessions import SESSION_COOKIE_NAME
 from app.schemas.auth import TokenResponse
 from app.services.oidc_provider import OIDCIdentity
 from app.services.oidc_service import OIDC_FAILURE_EVENT, OIDC_SUCCESS_EVENT, OIDCService
@@ -177,19 +179,66 @@ def test_oidc_callback_success_updates_existing_user_and_audits(
     assert existing.auth_provider == "ExampleSSO"
     assert existing.external_subject == "oidc-subject-1"
     assert existing.role == UserRole.SECURITY_REVIEWER
+    assert existing.provisioned_source == UserProvisionedSource.OIDC
     assert db_session.scalar(select(AuditEvent).where(AuditEvent.event_type == OIDC_SUCCESS_EVENT)) is not None
+
+
+def test_oidc_exchange_supports_cookie_session_mode(
+    client,
+    db_session,
+    seeded_tenants,
+    fake_oidc_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENTGATE_AUTH_SESSION_MODE", "cookie")
+    monkeypatch.setenv("AGENTGATE_COOKIE_SECURE", "false")
+    monkeypatch.setenv("AGENTGATE_COOKIE_SAMESITE", "lax")
+    monkeypatch.setenv("AGENTGATE_CSRF_ENABLED", "true")
+    get_settings.cache_clear()
+    _create_oidc_config(db_session, tenant=seeded_tenants["tenant_a"])
+    fake_oidc_provider.identities["code-cookie"] = OIDCIdentity(
+        subject="oidc-cookie-subject",
+        email=seeded_tenants["developer_a"].email,
+        full_name="Developer Cookie SSO",
+        issuer="https://issuer.example",
+        audience="oidc-client-123",
+        groups=[],
+        claims={"email": seeded_tenants["developer_a"].email},
+    )
+
+    login_response = client.get(
+        f"/v1/auth/oidc/{seeded_tenants['tenant_a'].slug}/login",
+        follow_redirects=False,
+    )
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+    callback_response = client.get(
+        f"/v1/auth/oidc/{seeded_tenants['tenant_a'].slug}/callback",
+        params={"code": "code-cookie", "state": state},
+        follow_redirects=False,
+    )
+    ticket = _extract_ticket_from_redirect(callback_response.headers["location"])
+
+    exchange_response = client.post("/v1/auth/oidc/exchange", json={"ticket": ticket})
+    me_response = client.get("/v1/auth/me")
+
+    assert exchange_response.status_code == 200
+    assert exchange_response.json()["access_token"] is None
+    assert exchange_response.json()["session_mode"] == "cookie"
+    assert exchange_response.json()["csrf_token"]
+    assert SESSION_COOKIE_NAME in exchange_response.headers.get("set-cookie", "")
+    assert me_response.status_code == 200
 
 
 def test_oidc_invalid_state_rejected(client, db_session, seeded_tenants, fake_oidc_provider):
     _create_oidc_config(db_session, tenant=seeded_tenants["tenant_a"])
     fake_oidc_provider.identities["code-ok"] = OIDCIdentity(
         subject="oidc-subject-2",
-        email="reviewer@tenant-a.local",
+        email="reviewer@tenant-a.example.com",
         full_name="Reviewer Via SSO",
         issuer="https://issuer.example",
         audience="oidc-client-123",
         groups=[],
-        claims={"email": "reviewer@tenant-a.local"},
+        claims={"email": "reviewer@tenant-a.example.com"},
     )
 
     client.get(
@@ -213,7 +262,7 @@ def test_oidc_email_domain_mismatch_rejected(client, db_session, seeded_tenants,
     _create_oidc_config(
         db_session,
         tenant=seeded_tenants["tenant_a"],
-        allowed_email_domains=["tenant-a.local"],
+        allowed_email_domains=["tenant-a.example.com"],
     )
     fake_oidc_provider.identities["code-domain"] = OIDCIdentity(
         subject="oidc-subject-3",
@@ -246,12 +295,12 @@ def test_oidc_cross_tenant_login_rejected(client, db_session, seeded_tenants, fa
     _create_oidc_config(db_session, tenant=seeded_tenants["tenant_b"], provider_name="TenantBSSO")
     fake_oidc_provider.identities["code-cross"] = OIDCIdentity(
         subject="oidc-subject-4",
-        email="admin@tenant-a.local",
+        email="admin@tenant-a.example.com",
         full_name="Admin A via SSO",
         issuer="https://issuer.example",
         audience="oidc-client-123",
         groups=[],
-        claims={"email": "admin@tenant-a.local"},
+        claims={"email": "admin@tenant-a.example.com"},
     )
 
     login_response = client.get(
@@ -282,12 +331,12 @@ def test_oidc_role_mapping_assigns_default_viewer_when_no_match(
     )
     fake_oidc_provider.identities["code-new"] = OIDCIdentity(
         subject="oidc-subject-5",
-        email="new.user@tenant-a.local",
+        email="new.user@tenant-a.example.com",
         full_name="New User",
         issuer="https://issuer.example",
         audience="oidc-client-123",
         groups=[],
-        claims={"email": "new.user@tenant-a.local", "department": "sales"},
+        claims={"email": "new.user@tenant-a.example.com", "department": "sales"},
     )
 
     login_response = client.get(
@@ -311,6 +360,7 @@ def test_oidc_role_mapping_assigns_default_viewer_when_no_match(
     assert me_response.status_code == 200
     assert user is not None
     assert user.role == UserRole.VIEWER
+    assert user.provisioned_source == UserProvisionedSource.OIDC
 
 
 def test_oidc_config_status_and_errors_do_not_expose_secrets_or_tokens(
