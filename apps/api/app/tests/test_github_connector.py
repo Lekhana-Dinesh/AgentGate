@@ -8,8 +8,10 @@ import pytest
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from sqlalchemy import select
 
 from app.core.errors import AppError
+from app.models import AuditEvent, Tool, ToolCall
 from app.tools.base import ToolExecutionRequest
 from app.tools.github_adapter import GitHubToolAdapter
 from app.tools.github_auth import ConfiguredGitHubAuthProvider, GitHubAppAuthProvider
@@ -195,8 +197,203 @@ def test_tool_safe_detail_is_tenant_scoped(client, seeded_tenants):
     assert payload["type"] == "github"
     assert "config" not in payload
     assert payload["base_url"] == "https://api.github.com"
-    assert "token_env_var" not in reviewer_response.text
+    assert payload["repository_allowlist"] == ["agentgate-labs/internal-agentgate", "octocat/hello-world"]
+    assert payload["internal_repositories"] == ["agentgate-labs/internal-agentgate"]
+    assert payload["internal_owners"] == ["agentgate-labs"]
+    assert payload["public_repositories"] == ["octocat/hello-world"]
+    assert payload["credential_references"][0]["reference_name"] == "AGENTGATE_GITHUB_TOKEN"
+    assert payload["credential_references"][0]["configured"] is False
+    assert payload["connector_mode"] == "live_connector"
+    assert payload["live_execution_ready"] is False
+    assert "Live GitHub is not configured" in payload["status_summary"]
+    assert "AGENTGATE_GITHUB_TOKEN" in reviewer_response.text
+    assert "ghp_" not in reviewer_response.text
+    assert "secret_ref:" not in reviewer_response.text
     assert "private_key_env_var" not in reviewer_response.text
+
+
+def test_github_safe_detail_returns_actionable_demo_safe_live_setup_guidance(client, seeded_tenants):
+    admin_token = make_token(seeded_tenants["admin_a"])
+    reviewer_token = make_token(seeded_tenants["reviewer_a"])
+    github_tool_id = _github_tool_id(client, admin_token)
+
+    update_response = client.put(
+        f"/v1/tools/{github_tool_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"config": _github_config(demo_safe_mock=True)},
+    )
+    assert update_response.status_code == 200
+
+    response = client.get(
+        f"/v1/tools/{github_tool_id}/safe-detail",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["health_status"] == "unconfigured"
+    assert payload["connector_mode"] == "demo_safe_mock"
+    assert payload["live_execution_ready"] is False
+    assert any(
+        "does not require a live GitHub call" in message
+        for message in payload["validation_messages"]
+    )
+    assert any(
+        "AGENTGATE_GITHUB_TOKEN" in message
+        for message in payload["validation_messages"]
+    )
+    assert "reviewed repository scope" in payload["status_summary"]
+    assert "Bearer " not in response.text
+
+
+def test_github_safe_detail_degrades_when_repository_allowlist_is_empty(client, seeded_tenants, monkeypatch):
+    monkeypatch.setenv("AGENTGATE_GITHUB_TOKEN", "test-token")
+    admin_token = make_token(seeded_tenants["admin_a"])
+    github_tool_id = _github_tool_id(client, admin_token)
+
+    update_response = client.put(
+        f"/v1/tools/{github_tool_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "config": _github_config(
+                repository_allowlist=[],
+                internal_repositories=[],
+                public_repositories=[],
+            )
+        },
+    )
+    assert update_response.status_code == 200
+
+    detail_response = client.get(
+        f"/v1/tools/{github_tool_id}/safe-detail",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["health_status"] == "degraded"
+    assert payload["live_execution_ready"] is False
+    assert "repository_allowlist_missing" in payload["warning_flags"]
+    assert "repository scope still needs operator review" in payload["status_summary"]
+    assert any(
+        "Repository allowlist is empty" in message
+        for message in payload["validation_messages"]
+    )
+
+
+def test_github_probe_health_records_safe_failed_probe_evidence_without_secrets(
+    client,
+    db_session,
+    seeded_tenants,
+):
+    admin_token = make_token(seeded_tenants["admin_a"])
+    github_tool_id = _github_tool_id(client, admin_token)
+
+    probe_response = client.post(
+        f"/v1/tools/{github_tool_id}/probe-health",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert probe_response.status_code == 200
+    assert probe_response.json()["health_status"] == "unconfigured"
+
+    detail_response = client.get(
+        f"/v1/tools/{github_tool_id}/safe-detail",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["last_probe"]["status"] == "unconfigured"
+    assert payload["last_probe"]["probe_performed"] is False
+    assert payload["last_probe"]["can_connect"] is None
+    assert payload["last_probe"]["source"] == "manual_probe"
+    assert payload["last_probe"]["error_summary"] == (
+        "The latest connector probe could not run a live check because required live credentials are not configured."
+    )
+    assert payload["last_successful_probe_at"] is None
+    assert payload["last_failed_probe_at"] is not None
+    assert payload["last_failed_probe_error_summary"] == payload["last_probe"]["error_summary"]
+    assert "ghp_" not in detail_response.text
+    assert "Bearer " not in detail_response.text
+
+    event = db_session.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.tenant_id == seeded_tenants["tenant_a"].id,
+            AuditEvent.resource_id == github_tool_id,
+            AuditEvent.event_type == "connector_health_probe.recorded",
+        )
+        .order_by(AuditEvent.created_at.desc())
+    )
+    assert event is not None
+    assert event.metadata_json["status"] == "unconfigured"
+    assert event.metadata_json["probe_performed"] is False
+    assert event.metadata_json["can_connect"] is None
+    assert event.metadata_json["source"] == "manual_probe"
+    assert "ghp_" not in json.dumps(event.metadata_json)
+
+
+def test_github_probe_health_records_safe_successful_probe_without_secret_exposure(
+    client,
+    db_session,
+    seeded_tenants,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENTGATE_GITHUB_TOKEN", "test-token")
+    admin_token = make_token(seeded_tenants["admin_a"])
+    github_tool_id = _github_tool_id(client, admin_token)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rate_limit"
+        assert request.headers["Authorization"] == "Bearer test-token"
+        return httpx.Response(200, json={"resources": {"core": {"remaining": 4999}}})
+
+    _install_github_transport(monkeypatch, handler)
+
+    probe_response = client.post(
+        f"/v1/tools/{github_tool_id}/probe-health",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert probe_response.status_code == 200
+    probe_payload = probe_response.json()
+    assert probe_payload["health_status"] == "ready"
+    assert probe_payload["live_execution_ready"] is True
+
+    detail_response = client.get(
+        f"/v1/tools/{github_tool_id}/safe-detail",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["last_probe"]["status"] == "ready"
+    assert payload["last_probe"]["probe_performed"] is True
+    assert payload["last_probe"]["can_connect"] is True
+    assert payload["last_probe"]["source"] == "manual_probe"
+    assert payload["last_probe"]["error_summary"] is None
+    assert payload["last_successful_probe_at"] is not None
+    assert payload["last_failed_probe_at"] is None
+    assert payload["last_failed_probe_error_summary"] is None
+    assert "test-token" not in detail_response.text
+    assert "Bearer " not in detail_response.text
+
+    event = db_session.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.tenant_id == seeded_tenants["tenant_a"].id,
+            AuditEvent.resource_id == github_tool_id,
+            AuditEvent.event_type == "connector_health_probe.recorded",
+        )
+        .order_by(AuditEvent.created_at.desc())
+    )
+    assert event is not None
+    assert event.metadata_json["status"] == "ready"
+    assert event.metadata_json["probe_performed"] is True
+    assert event.metadata_json["can_connect"] is True
+    assert event.metadata_json["error_summary"] is None
+    assert "test-token" not in json.dumps(event.metadata_json)
 
 
 def test_tool_safe_metadata_create_and_update_for_github_is_sanitized_and_rbac_scoped(client, seeded_tenants):
@@ -249,9 +446,9 @@ def test_tool_safe_metadata_create_and_update_for_github_is_sanitized_and_rbac_s
     assert payload["repository_allowlist"] == ["agentgate-labs/internal-agentgate", "octocat/hello-world"]
     assert "config" not in payload
     assert "token_env_var" not in admin_response.text
-    assert "private_key_env_var" not in admin_response.text
     assert "private_key_secret_ref" not in admin_response.text
-    assert "AGENTGATE_GITHUB_APP_PRIVATE_KEY" not in admin_response.text
+    assert payload["credential_references"][0]["reference_name"] == "AGENTGATE_GITHUB_APP_PRIVATE_KEY"
+    assert "-----BEGIN" not in admin_response.text
 
     tool_id = payload["id"]
     update_response = client.patch(
@@ -273,8 +470,8 @@ def test_tool_safe_metadata_create_and_update_for_github_is_sanitized_and_rbac_s
     updated_payload = update_response.json()
     assert updated_payload["enabled"] is False
     assert updated_payload["public_repositories"] == ["octocat/hello-world", "openai/openai-cookbook"]
-    assert "private_key_env_var" not in update_response.text
-    assert "AGENTGATE_GITHUB_APP_PRIVATE_KEY" not in update_response.text
+    assert updated_payload["credential_references"][0]["reference_name"] == "AGENTGATE_GITHUB_APP_PRIVATE_KEY"
+    assert "-----BEGIN" not in update_response.text
 
 
 def test_tool_safe_metadata_route_rejects_secret_like_github_fields_without_echoing_values(client, seeded_tenants):
@@ -795,6 +992,81 @@ def test_security_reviewer_can_approve_and_execute_pending_github_comment(
 
     assert decision_response.status_code == 200
     assert decision_response.json()["status"] == "approved"
+
+
+def test_demo_safe_github_comment_executes_after_approval_without_live_connector(
+    client,
+    db_session,
+    seeded_tenants,
+    monkeypatch,
+):
+    admin_token = make_token(seeded_tenants["admin_a"])
+    reviewer_token = make_token(seeded_tenants["reviewer_a"])
+    github_tool = db_session.scalar(
+        select(Tool).where(
+            Tool.tenant_id == seeded_tenants["tenant_a"].id,
+            Tool.name == "GitHub",
+        )
+    )
+    assert github_tool is not None
+    github_tool.config = {
+        **(github_tool.config or {}),
+        "demo_safe_mock": True,
+    }
+    db_session.commit()
+
+    def _unexpected_client(*args, **kwargs):
+        raise AssertionError("Live GitHub client should not be built in demo-safe mode.")
+
+    monkeypatch.setattr(GitHubToolAdapter, "_build_client", _unexpected_client)
+
+    gateway_response = client.post(
+        "/v1/gateway/tool-call",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "agent_id": seeded_tenants["agent_a"].id,
+            "user_id": seeded_tenants["admin_a"].id,
+            "original_intent": "Post a customer-visible issue comment after approval.",
+            "tool_name": "GitHub",
+            "action_name": "comment_on_issue_or_pr",
+            "arguments": {
+                "repository": "octocat/hello-world",
+                "repository_visibility": "public",
+                "number": 14,
+                "body": "Customer-safe update approved by the security reviewer.",
+            },
+            "data_classifications": ["customer_visible"],
+            "metadata": {"trace_finalize": True},
+        },
+    )
+
+    assert gateway_response.status_code == 200
+    assert gateway_response.json()["status"] == "pending_approval"
+
+    approvals_response = client.get(
+        "/v1/approvals?status=pending",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    )
+    approval_id = next(
+        item["id"]
+        for item in approvals_response.json()
+        if item["tool_call"]["tool_name"] == "GitHub"
+    )
+
+    decision_response = client.post(
+        f"/v1/approvals/{approval_id}/approve",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+        json={"approver_comment": "Approved in demo-safe mode.", "execute_now": True},
+    )
+
+    assert decision_response.status_code == 200
+    assert decision_response.json()["status"] == "approved"
+    assert decision_response.json()["execution_status"]["status"] == "succeeded"
+
+    tool_call = db_session.scalar(select(ToolCall).where(ToolCall.id == gateway_response.json()["tool_call_id"]))
+    assert tool_call is not None
+    assert tool_call.status.value == "executed"
+    assert tool_call.response_payload["tool_output"]["execution_mode"] == "demo_safe_mock"
 
 
 def test_github_app_jwt_generation_uses_configured_private_key():

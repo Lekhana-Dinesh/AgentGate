@@ -57,6 +57,12 @@ class GitHubToolAdapter(ToolExecutionAdapter):
         owner, repo = self._resolve_repository(request.arguments)
         repository = f"{owner}/{repo}"
         self._assert_repository_allowed(repository, request.config)
+        if bool((request.config or {}).get("demo_safe_mock")):
+            return self._execute_demo_safe_mock(
+                action=action,
+                repository=repository,
+                arguments=request.arguments,
+            )
         base_url = request.base_url or DEFAULT_GITHUB_API_BASE_URL
         auth_context = self.auth_provider.get_auth_context(request.config, base_url=base_url)
         timeout = self._build_timeout(request.config)
@@ -205,6 +211,109 @@ class GitHubToolAdapter(ToolExecutionAdapter):
                     "html_url": payload["html_url"],
                     "created_at": payload["created_at"],
                 }
+
+        raise AppError(
+            "GitHub action is not allowed by this connector.",
+            status_code=400,
+            code="github_action_not_allowed",
+        )
+
+    def _execute_demo_safe_mock(
+        self,
+        *,
+        action: str,
+        repository: str,
+        arguments: dict,
+    ) -> dict:
+        demo_base_url = "https://github.example.test"
+
+        if action == "get_repository_metadata":
+            visibility = str(arguments.get("repository_visibility") or arguments.get("visibility") or "private").strip()
+            visibility = visibility or "private"
+            return {
+                "full_name": repository,
+                "private": visibility != "public",
+                "visibility": visibility,
+                "default_branch": "main",
+                "open_issues_count": 4,
+                "stargazers_count": 0,
+                "html_url": f"{demo_base_url}/{repository}",
+                "archived": False,
+                "execution_mode": "demo_safe_mock",
+            }
+
+        if action == "list_pull_requests":
+            return {
+                "repository": repository,
+                "count": 2,
+                "pull_requests": [
+                    {
+                        "number": 14,
+                        "title": "Customer-visible issue follow-up",
+                        "state": "open",
+                        "draft": False,
+                        "html_url": f"{demo_base_url}/{repository}/pull/14",
+                    },
+                    {
+                        "number": 15,
+                        "title": "Operator validation checklist",
+                        "state": "open",
+                        "draft": False,
+                        "html_url": f"{demo_base_url}/{repository}/pull/15",
+                    },
+                ],
+                "execution_mode": "demo_safe_mock",
+            }
+
+        if action == "get_pull_request_details":
+            pull_number = self._require_positive_integer(arguments, "pull_number")
+            return {
+                "repository": repository,
+                "number": pull_number,
+                "title": "Customer-visible issue follow-up",
+                "state": "open",
+                "draft": False,
+                "merged": False,
+                "html_url": f"{demo_base_url}/{repository}/pull/{pull_number}",
+                "head_ref": "demo/fix-public-status",
+                "base_ref": "main",
+                "execution_mode": "demo_safe_mock",
+            }
+
+        if action == "create_issue":
+            title = str(arguments.get("title", "")).strip()
+            if not title:
+                raise AppError(
+                    "GitHub issue title is required.",
+                    status_code=422,
+                    code="github_issue_title_required",
+                )
+            return {
+                "repository": repository,
+                "number": 241,
+                "title": title,
+                "state": "open",
+                "html_url": f"{demo_base_url}/{repository}/issues/241",
+                "execution_mode": "demo_safe_mock",
+            }
+
+        if action == "comment_on_issue_or_pr":
+            number = self._require_positive_integer(arguments, "number")
+            comment_body = str(arguments.get("body", "")).strip()
+            if not comment_body:
+                raise AppError(
+                    "GitHub comment body is required.",
+                    status_code=422,
+                    code="github_comment_body_required",
+                )
+            return {
+                "repository": repository,
+                "number": number,
+                "comment_id": 9001,
+                "html_url": f"{demo_base_url}/{repository}/issues/{number}#issuecomment-9001",
+                "created_at": "2026-05-20T10:00:00Z",
+                "execution_mode": "demo_safe_mock",
+            }
 
         raise AppError(
             "GitHub action is not allowed by this connector.",

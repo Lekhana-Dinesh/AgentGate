@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -169,6 +169,7 @@ def get_tool_health(
 @router.post("/{tool_id}/probe-health", response_model=ToolSafeSummaryResponse)
 def probe_tool_health(
     tool_id: str,
+    request: Request,
     current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
     db: Session = Depends(get_db),
 ) -> ToolSafeSummaryResponse:
@@ -177,6 +178,9 @@ def probe_tool_health(
         tenant_id=current_user.tenant_id,
         tool_id=tool_id,
         probe=True,
+        actor_type=AuditActorType.USER,
+        actor_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
     )
 
 

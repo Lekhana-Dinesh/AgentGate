@@ -23,7 +23,17 @@ from app.core.enums import (
 from app.core.errors import AppError
 from app.core.metrics import get_metrics_registry
 from app.models import Agent, ApprovalRequest, Policy, Tool, ToolCall, User
-from app.schemas.gateway import GatewayDecisionResponse, PolicyEvaluationResult, ToolCallRequest
+from app.schemas.gateway import (
+    GatewayDecisionResponse,
+    PolicyEvaluationResult,
+    ToolCallRequest,
+)
+from app.schemas.policy import (
+    PolicySimulationMatch,
+    PolicySimulationPolicyInput,
+    PolicySimulationRequest,
+    PolicySimulationResponse,
+)
 from app.services.audit_service import AuditService
 from app.services.intent_service import IntentContext, IntentService
 from app.services.notification_service import NotificationService
@@ -502,6 +512,323 @@ class GatewayService:
             executed=executed,
             output=self.payload_service.sanitize_payload(tool_output) if tool_output else None,
         )
+
+    def simulate_policy_decision(
+        self,
+        db: Session,
+        *,
+        current_user: User,
+        payload: PolicySimulationRequest,
+    ) -> PolicySimulationResponse:
+        tool_call_payload = self._simulation_payload_to_tool_call_request(payload)
+        tenant_id = current_user.tenant_id
+        agent = self._get_agent(db, tenant_id=tenant_id, agent_id=tool_call_payload.agent_id)
+        tool = self._get_tool(db, tenant_id=tenant_id, tool_name=tool_call_payload.tool_name)
+
+        if payload.tool_type is not None and tool.type != payload.tool_type:
+            raise AppError(
+                "tool_type does not match the stored tool metadata.",
+                status_code=422,
+                code="tool_type_mismatch",
+            )
+        if agent.status != AgentStatus.ACTIVE:
+            raise AppError("Agent is not active.", status_code=403, code="agent_inactive")
+        if not tool.enabled:
+            raise AppError("Tool is disabled.", status_code=403, code="tool_disabled")
+        if agent.allowed_tools and tool.name not in agent.allowed_tools:
+            raise AppError("Agent is not allowed to use this tool.", status_code=403, code="tool_not_allowed")
+        if agent.allowed_data_classes:
+            invalid_data_classes = sorted(set(tool_call_payload.data_classifications) - set(agent.allowed_data_classes))
+            if invalid_data_classes:
+                raise AppError(
+                    "Agent requested data classes that are not allowed.",
+                    status_code=403,
+                    code="data_class_not_allowed",
+                    extra={"data_classes": invalid_data_classes},
+                )
+
+        repo_trust = self._resolve_repository_trust(tool, tool_call_payload.arguments, tool_call_payload.metadata)
+        recipient_domain = self._resolve_recipient_domain(
+            tool,
+            tool_call_payload.action_name,
+            tool_call_payload.arguments,
+            tool_call_payload.metadata,
+            repo_trust=repo_trust,
+        )
+        effective_data_classifications = self._augment_data_classifications(
+            tool,
+            tool_call_payload.action_name,
+            tool_call_payload.arguments,
+            tool_call_payload.data_classifications,
+            repo_trust,
+        )
+        amount = self._extract_amount(tool_call_payload.arguments)
+        discount_percent = self._extract_numeric_argument(tool_call_payload.arguments, "discount_percent")
+        monetary_amount = self._extract_numeric_argument(tool_call_payload.arguments, "amount", "refund_amount")
+        row_count = self._extract_integer_argument(tool_call_payload.arguments, "row_count")
+        irreversible = bool(tool_call_payload.arguments.get("irreversible", False))
+
+        intent_result = self.intent_service.evaluate(
+            IntentContext(
+                original_intent=tool_call_payload.original_intent,
+                tool_name=tool_call_payload.tool_name,
+                action_name=tool_call_payload.action_name,
+                arguments=tool_call_payload.arguments,
+                data_classifications=effective_data_classifications,
+            )
+        )
+
+        risk_input = RiskInput(
+            tool_risk=tool.risk_level,
+            action_name=self._risk_action_name(tool_call_payload.action_name, tool_call_payload.arguments),
+            data_classifications=effective_data_classifications,
+            recipient_domain=recipient_domain,
+            environment=agent.environment.value,
+            amount=amount,
+            discount_percent=discount_percent,
+            monetary_amount=monetary_amount,
+            row_count=row_count,
+            irreversible=irreversible,
+            intent_mismatch=not intent_result.intent_match,
+        )
+        preliminary_risk = self.risk_service.assess(risk_input)
+
+        policy_context = PolicyContext(
+            tool_name=tool_call_payload.tool_name,
+            action_name=tool_call_payload.action_name,
+            recipient_domain=recipient_domain,
+            repo_trust=repo_trust,
+            data_classifications=effective_data_classifications,
+            risk_score=preliminary_risk.score,
+            environment=agent.environment.value,
+            amount=amount,
+            discount_percent=discount_percent,
+            row_count=row_count,
+            intent_mismatch=not intent_result.intent_match,
+        )
+        policies, policy_lookup = self._resolve_simulation_policies(
+            db,
+            tenant_id=tenant_id,
+            policy_ids=payload.policy_ids,
+            proposed_policies=payload.proposed_policies,
+        )
+        policy_result = self.policy_engine.evaluate(policies, policy_context)
+        max_policy_severity = self._max_policy_severity(policies, policy_result)
+        final_risk = self.risk_service.assess(
+            replace(risk_input, max_policy_severity=max_policy_severity)
+        )
+        decision_result = self._apply_guardrails(
+            payload=tool_call_payload,
+            recipient_domain=recipient_domain,
+            risk_band=final_risk.band,
+            intent_match=intent_result.intent_match,
+            policy_result=policy_result,
+        )
+        matched_policies = self._serialize_simulation_matches(decision_result, policy_lookup)
+        major_factors = self._major_decision_factors(
+            intent_result=intent_result,
+            risk=final_risk,
+            decision_result=decision_result,
+            matched_policies=matched_policies,
+        )
+
+        return PolicySimulationResponse(
+            decision=decision_result.decision,
+            approval_required=decision_result.decision == PolicyDecision.REQUIRE_APPROVAL,
+            risk_band=final_risk.band,
+            intent=intent_result,
+            risk=final_risk,
+            matched_policies=matched_policies,
+            major_decision_factors=major_factors,
+            policy_reasons=decision_result.reasons,
+            explanation=self._build_simulation_explanation(
+                decision_result=decision_result,
+                intent_result=intent_result,
+                risk=final_risk,
+                matched_policies=matched_policies,
+            ),
+        )
+
+    def _simulation_payload_to_tool_call_request(
+        self,
+        payload: PolicySimulationRequest,
+    ) -> ToolCallRequest:
+        metadata = dict(payload.metadata)
+        if payload.target_hint:
+            metadata.setdefault("simulation_target_hint", payload.target_hint)
+        if payload.resource_hint:
+            metadata.setdefault("simulation_resource_hint", payload.resource_hint)
+        return ToolCallRequest(
+            agent_id=payload.agent_id,
+            original_intent=payload.original_intent,
+            tool_name=payload.tool_name,
+            action_name=payload.action_name,
+            arguments=payload.arguments,
+            data_classifications=payload.data_classifications,
+            metadata=metadata,
+        )
+
+    def _resolve_simulation_policies(
+        self,
+        db: Session,
+        *,
+        tenant_id: str,
+        policy_ids: list[str],
+        proposed_policies: list[PolicySimulationPolicyInput],
+    ) -> tuple[list[Policy], dict[str, dict[str, object]]]:
+        policy_lookup: dict[str, dict[str, object]] = {}
+        if policy_ids:
+            ordered_ids = list(dict.fromkeys(policy_ids))
+            saved_policies = list(
+                db.scalars(
+                    select(Policy).where(
+                        Policy.tenant_id == tenant_id,
+                        Policy.id.in_(ordered_ids),
+                    )
+                )
+            )
+            by_id = {policy.id: policy for policy in saved_policies}
+            missing_ids = [policy_id for policy_id in ordered_ids if policy_id not in by_id]
+            if missing_ids:
+                raise AppError("Policy not found.", status_code=404, code="policy_not_found")
+            selected_policies = [by_id[policy_id] for policy_id in ordered_ids]
+        else:
+            selected_policies = list(
+                db.scalars(
+                    select(Policy).where(
+                        Policy.tenant_id == tenant_id,
+                        Policy.enabled.is_(True),
+                    )
+                )
+            )
+
+        for policy in selected_policies:
+            policy_lookup[policy.id] = {
+                "policy_id": policy.id,
+                "name": policy.name,
+                "severity": policy.severity,
+                "decision": policy.decision,
+                "source": "saved",
+            }
+
+        for index, proposed_policy in enumerate(proposed_policies, start=1):
+            simulated_id = f"proposed-policy-{index}"
+            selected_policies.append(
+                Policy(
+                    id=simulated_id,
+                    tenant_id=tenant_id,
+                    name=proposed_policy.name,
+                    description=proposed_policy.description,
+                    enabled=proposed_policy.enabled,
+                    severity=proposed_policy.severity,
+                    conditions=proposed_policy.conditions.model_dump(),
+                    decision=proposed_policy.decision,
+                    created_by=None,
+                )
+            )
+            policy_lookup[simulated_id] = {
+                "policy_id": None,
+                "name": proposed_policy.name,
+                "severity": proposed_policy.severity,
+                "decision": proposed_policy.decision,
+                "source": "proposed",
+            }
+
+        return selected_policies, policy_lookup
+
+    def _serialize_simulation_matches(
+        self,
+        result: PolicyEvaluationResult,
+        policy_lookup: dict[str, dict[str, object]],
+    ) -> list[PolicySimulationMatch]:
+        matches: list[PolicySimulationMatch] = []
+        for match in result.matched_policies:
+            metadata = policy_lookup.get(match.policy_id)
+            if metadata is None:
+                matches.append(
+                    PolicySimulationMatch(
+                        policy_id=match.policy_id,
+                        name=match.name,
+                        severity=PolicySeverity(match.severity),
+                        decision=PolicyDecision(match.decision),
+                        source="saved",
+                    )
+                )
+                continue
+            matches.append(
+                PolicySimulationMatch(
+                    policy_id=metadata["policy_id"],
+                    name=str(metadata["name"]),
+                    severity=metadata["severity"],
+                    decision=metadata["decision"],
+                    source=str(metadata["source"]),
+                )
+            )
+        return matches
+
+    def _major_decision_factors(
+        self,
+        *,
+        intent_result: IntentCheckResult,
+        risk,
+        decision_result: PolicyEvaluationResult,
+        matched_policies: list[PolicySimulationMatch],
+    ) -> list[str]:
+        factors: list[str] = []
+        seen: set[str] = set()
+
+        def add(item: str) -> None:
+            normalized = item.strip()
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            factors.append(normalized)
+
+        for match in matched_policies:
+            source_label = "saved" if match.source == "saved" else "proposed"
+            add(f'Matched {source_label} policy "{match.name}" with {match.decision.value} decision.')
+
+        for reason in decision_result.reasons:
+            if reason.startswith("Built-in"):
+                add(reason)
+
+        for reason in intent_result.detected_mismatch_reasons:
+            add(reason)
+
+        for factor in sorted(risk.factors, key=lambda item: item.weight, reverse=True):
+            add(factor.explanation)
+            if len(factors) >= 6:
+                break
+
+        return factors[:6]
+
+    def _build_simulation_explanation(
+        self,
+        *,
+        decision_result: PolicyEvaluationResult,
+        intent_result: IntentCheckResult,
+        risk,
+        matched_policies: list[PolicySimulationMatch],
+    ) -> str:
+        decision_text = {
+            PolicyDecision.ALLOW: "allow",
+            PolicyDecision.REQUIRE_APPROVAL: "require approval for",
+            PolicyDecision.BLOCK: "block",
+            PolicyDecision.REDACT: "allow only with redaction for",
+        }[decision_result.decision]
+        parts = [
+            f"Simulation only: AgentGate would {decision_text} this request.",
+            f"Risk is {risk.band.value} at score {risk.score:.0f}.",
+        ]
+        if matched_policies:
+            policy_word = "policy" if len(matched_policies) == 1 else "policies"
+            parts.append(f"{len(matched_policies)} {policy_word} matched during evaluation.")
+        if not intent_result.intent_match:
+            parts.append("Intent analysis found behaviors that were not clearly authorized by the stated business intent.")
+        if any(reason.startswith("Built-in") for reason in decision_result.reasons):
+            parts.append("Built-in gateway guardrails also influenced the simulated outcome.")
+        parts.append("No external tool was executed, no approval was created, and no job was enqueued.")
+        return " ".join(parts)
 
     def _get_agent(self, db: Session, *, tenant_id: str, agent_id: str) -> Agent:
         agent = db.scalar(select(Agent).where(Agent.id == agent_id, Agent.tenant_id == tenant_id))

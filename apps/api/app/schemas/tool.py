@@ -70,15 +70,37 @@ class ToolSafeSummaryResponse(BaseModel):
     health_can_connect: bool | None = None
     health_probe_performed: bool = False
     health_checked_at: datetime | None = None
+    connector_mode: Literal["demo_safe_mock", "live_connector", "not_applicable"] = "not_applicable"
+    live_execution_ready: bool = False
+    status_summary: str | None = None
     warning_flags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class ToolCredentialReference(BaseModel):
+    key: str
+    label: str
+    reference_name: str | None = None
+    reference_type: Literal["env", "secret_ref", "vault"] | None = None
+    configured: bool | None = None
+
+
+class ToolProbeObservationResponse(BaseModel):
+    status: Literal["ready", "degraded", "unconfigured", "unsupported"]
+    checked_at: datetime
+    probe_performed: bool
+    can_connect: bool | None = None
+    error_summary: str | None = None
+    source: Literal["manual_probe", "health_check_job"] | None = None
 
 
 class ToolSafeDetailResponse(ToolSafeSummaryResponse):
     base_url: str | None = None
     documentation_path: str | None = None
     supported_auth_modes: list[str] = Field(default_factory=list)
+    credential_references: list[ToolCredentialReference] = Field(default_factory=list)
+    validation_messages: list[str] = Field(default_factory=list)
     repository_allowlist: list[str] = Field(default_factory=list)
     internal_repositories: list[str] = Field(default_factory=list)
     internal_owners: list[str] = Field(default_factory=list)
@@ -93,6 +115,10 @@ class ToolSafeDetailResponse(ToolSafeSummaryResponse):
     transport: str | None = None
     allowed_tool_names: list[str] = Field(default_factory=list)
     blocked_tool_names: list[str] = Field(default_factory=list)
+    last_probe: ToolProbeObservationResponse | None = None
+    last_successful_probe_at: datetime | None = None
+    last_failed_probe_at: datetime | None = None
+    last_failed_probe_error_summary: str | None = None
 
 
 class ToolSafeMetadataCreate(BaseModel):
