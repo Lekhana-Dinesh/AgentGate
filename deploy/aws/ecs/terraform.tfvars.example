@@ -1,0 +1,37 @@
+aws_region         = "us-east-1"
+name_prefix        = "agentgate"
+vpc_id             = "vpc-0123456789abcdef0"
+alb_subnet_ids     = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
+service_subnet_ids = ["subnet-0123456789abcdef2", "subnet-0123456789abcdef3"]
+
+public_app_url  = "https://agentgate.example.com"
+public_api_url  = "https://api.agentgate.example.com"
+public_app_host = "agentgate.example.com"
+public_api_host = "api.agentgate.example.com"
+
+alb_certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/replace-me"
+
+api_image_uri = "111122223333.dkr.ecr.us-east-1.amazonaws.com/agentgate-api:v0.1.0"
+web_image_uri = "111122223333.dkr.ecr.us-east-1.amazonaws.com/agentgate-web:v0.1.0"
+
+secret_key_secret_arn   = "arn:aws:secretsmanager:us-east-1:111122223333:secret:agentgate/secret-key-xxxxx"
+database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:agentgate/database-url-xxxxx"
+redis_url_secret_arn    = "arn:aws:secretsmanager:us-east-1:111122223333:secret:agentgate/redis-url-xxxxx"
+
+github_token_secret_arn            = "arn:aws:secretsmanager:us-east-1:111122223333:secret:agentgate/github-token-xxxxx"
+github_app_private_key_secret_arn  = null
+slack_bot_token_secret_arn         = null
+
+payload_kms_key_arn      = "arn:aws:kms:us-east-1:111122223333:key/replace-me"
+audit_integrity_s3_bucket = "replace-with-audit-checkpoint-bucket"
+audit_integrity_s3_region = "us-east-1"
+
+cors_origins = ["https://agentgate.example.com"]
+
+rds_security_group_id   = "sg-0123456789abcdef0"
+redis_security_group_id = "sg-0123456789abcdef1"
+
+tags = {
+  Environment = "production"
+  Owner       = "platform-team"
+}

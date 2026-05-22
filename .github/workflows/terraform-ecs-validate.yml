@@ -1,0 +1,53 @@
+name: Terraform ECS Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "deploy/aws/ecs/**"
+      - ".github/workflows/terraform-ecs-validate.yml"
+      - "Makefile"
+      - "docs/context/testing-ci.md"
+      - "docs/operations/aws-ecs-deployment.md"
+      - "docs/operations/aws-ecs-rehearsal.md"
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/aws/ecs/**"
+      - ".github/workflows/terraform-ecs-validate.yml"
+      - "Makefile"
+      - "docs/context/testing-ci.md"
+      - "docs/operations/aws-ecs-deployment.md"
+      - "docs/operations/aws-ecs-rehearsal.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-ecs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform-ecs:
+    name: Terraform ECS fmt/init/validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.3
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform -chdir=deploy/aws/ecs fmt -check
+
+      - name: Terraform init without backend
+        run: terraform -chdir=deploy/aws/ecs init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=deploy/aws/ecs validate
