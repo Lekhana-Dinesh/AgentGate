@@ -22,6 +22,7 @@ This file covers the Next.js admin console, typed API client, and the main opera
 - Optional cookie-session browser auth support without storing JWTs in localStorage
 - Agent detail view with API key lifecycle review, one-time post-create key display, and revoke controls for authorized operators
 - Policy management page with policy review, safe enable or disable controls for owner or admin roles, guided starter-template creation, and pilot policy-pack review guidance
+- Policy management page now also includes a dry-run simulation panel for owner, admin, and security reviewer roles so operators can test likely policy outcomes before changing live state
 - Typed client calls for audit export, audit integrity, scheduled tasks, users, settings, jobs, and other control-plane APIs
 - Safe browser controls for owner/admin operators to enable or disable scheduled tasks, enable or disable audit exports, run those workflows manually, and launch retention dry-runs without exposing secrets
 - Minimal but practical status pages for retention, audit checkpoints, and operator health
@@ -39,6 +40,7 @@ This file covers the Next.js admin console, typed API client, and the main opera
 - Keep onboarding as a safe status-and-navigation layer, not a full setup wizard or secret editor.
 - Keep the tools page as a narrow safe-metadata layer, not a full connector-management or secret-editing UI.
 - Keep policy authoring narrow: structured starter templates, safe enable or disable, and JSON preview only unless the backend contract deliberately expands.
+- Keep policy simulation narrow and advisory: reuse the typed API client, do not echo secrets or raw payloads back into the browser, and do not turn the page into a general execution console.
 - Keep scheduled-task, audit-export, and retention browser controls narrow: non-secret toggles, manual runs, and dry-runs only.
 - When backend contracts change, keep `lib/api.ts`, `types/api.ts`, and affected pages aligned.
 
@@ -51,6 +53,7 @@ This file covers the Next.js admin console, typed API client, and the main opera
 - Settings, audit, retention, and user pages are privileged surfaces and must remain safe-summary oriented.
 - Owner and admin roles can mutate only the narrow non-secret operational controls that already exist in the backend APIs; security reviewers stay read-only in the browser even when they can inspect the same pages.
 - Policy review is broader than policy mutation: the browser may show policy state to more roles than it allows to edit, but only owner and admin roles should get mutation controls.
+- Policy simulation is broader than policy mutation too: security reviewers may use the dry-run surface, but developer, approver, and viewer roles should not gain simulation access.
 - Onboarding must continue returning only safe tenant setup posture. It must not expose raw connector config, token env vars, secret refs, or decrypted payloads.
 - Tool and connector pages may expose narrow non-secret metadata controls, but they must stay on the safe side of the boundary and must not reintroduce raw config, secret refs, env-var token names, auth emails, or secret-bearing URLs.
 - Frontend code should not become a secret editor for deployment configuration.
@@ -66,6 +69,7 @@ This file covers the Next.js admin console, typed API client, and the main opera
 - The API key surface is intentionally narrow: it supports create, list, and revoke only, and there is no bulk rotation or cross-agent management workflow.
 - Operational browser controls remain intentionally narrow: scheduled-task creation and detailed audit-export destination editing still belong to APIs or deployment workflows, not the settings UI.
 - Policy management remains intentionally narrow: no drag ordering, no broad free-form browser editor, and no browser-side apply of the pilot policy pack.
+- The policy simulation panel is intentionally minimal: it helps operators review simulated outcomes, but it does not prove live connector success or replace deeper script-driven policy analysis.
 
 ## 7. Relevant tests
 

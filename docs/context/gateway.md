@@ -25,6 +25,7 @@ Read it before changing gateway execution, policy evaluation, approval routing, 
 - Deterministic intent analysis, baseline risk scoring, and policy evaluation
 - Conservative repo-shipped pilot policy pack under `policy-packs/pilot-default/` that maps existing gateway signals into approval-heavy starter policies
 - Policy management APIs plus a narrow browser review and starter-template surface for owner/admin operators without changing gateway policy semantics
+- Policy simulation API and browser panel that reuse the live deterministic intent, risk, policy, and guardrail path without executing any tool action
 - Built-in fail-closed guardrails for uncertain high-risk behavior
 - Trace creation and pending-approval trace locking
 - Sensitive execution arguments protected before persistence
@@ -36,6 +37,7 @@ Read it before changing gateway execution, policy evaluation, approval routing, 
 - Never bypass the normal gateway flow for convenience.
 - Keep every business read and write tenant-scoped.
 - Do not execute a connector directly from a route without going through gateway governance.
+- Keep policy simulation advisory only. It must not execute connectors, enqueue jobs, create approvals, write tool-call records, or mutate policy state.
 - Do not rewrite policy evaluation semantics to fit the browser UX. The UI must adapt to the deterministic engine, not the other way around.
 - `request_payload.arguments` stays sanitized. `execution_arguments` stays protected and backend-only.
 - Approval-required actions must not silently execute.
@@ -48,6 +50,7 @@ Read it before changing gateway execution, policy evaluation, approval routing, 
 - Protected payload decryption only happens on trusted execution paths.
 - Audit writes and trace data must not leak secrets or decrypted payloads.
 - Policy packs and browser templates can help operators author rules, but they do not replace connector allowlists, trust hints, or reviewer coverage.
+- Policy simulation reuses the same deterministic signals as the live gateway path, but it intentionally stops before traces, tool execution, approvals, and other durable side effects.
 
 ## 6. Known limitations
 
@@ -56,6 +59,7 @@ Read it before changing gateway execution, policy evaluation, approval routing, 
 - Rate limiting is fixed-window and not yet proxy-trust-aware.
 - Some write paths still depend on inline execution in local mode rather than always using a separate worker.
 - The browser policy UX is intentionally narrow: guided starter templates plus enable or disable review, while deeper pack customization and exact policy surgery remain API or script driven.
+- Policy simulation is advisory only. A simulated allow result does not prove downstream connector reachability, external permissions, or safe business impact.
 
 ## 7. Relevant tests
 

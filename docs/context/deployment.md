@@ -8,10 +8,14 @@ This file covers local and self-hosted deployment surfaces, environment validati
 
 - `docker-compose.yml`
 - `compose.prod.example.yml`
+- `deploy/aws/ecs/`
 - `scripts/validate-deployment.py`
 - `apps/api/app/core/config.py`
 - `apps/api/app/services/readiness_service.py`
 - `docs/operations/backup-and-restore.md`
+- `docs/operations/aws-ecs-deployment.md`
+- `docs/operations/aws-ecs-rehearsal.md`
+- `docs/operations/ecs-secrets-and-env.md`
 - `docs/operations/deployment-hardening.md`
 - `docs/operations/self-hosted-deployment.md`
 - `docs/operations/production-runbook.md`
@@ -21,6 +25,8 @@ This file covers local and self-hosted deployment surfaces, environment validati
 
 - Local Compose stack for API, web, worker, Postgres, and Redis
 - Separate self-hosted production-style Compose profile using external Postgres and Redis
+- AWS ECS/Fargate Terraform starter that preserves the same external Postgres, external Redis, KMS, and service-split assumptions
+- AWS ECS/Fargate rehearsal guidance for operator-owned Terraform planning, migration runs, rollout checks, and rollback decisions
 - Production-minded config validation for secrets, URLs, rate limiting, key provider setup, and audit-anchor mode
 - Optional production-minded browser session hardening with secure cookie validation and CSRF requirements
 - Optional tenant-scoped SCIM bearer-token bindings through env or secret-ref-style configuration
@@ -54,7 +60,7 @@ This file covers local and self-hosted deployment surfaces, environment validati
 
 ## 6. Known limitations
 
-- The production deployment story is Compose-based, not Kubernetes, Helm, or Terraform.
+- The production deployment story now includes Compose guidance plus an AWS ECS/Fargate Terraform starter, but it is still not Kubernetes, Helm, or a full cloud-platform module.
 - Readiness does not fully prove worker or scheduler liveness.
 - The deployment validator is a smoke test only; it does not prove worker throughput, scheduler progress, or external connector reachability.
 - The pilot rehearsal runner is an operator wrapper, not a replacement for production-style rehearsal, restore drills, or checkpoint verification.
@@ -63,11 +69,15 @@ This file covers local and self-hosted deployment surfaces, environment validati
 - SCIM token rotation is deployment-managed only in the current build; there is no tenant-admin token issuance UI or API.
 - External checkpoint anchoring is stronger than DB-only evidence, but not immutable without destination-side WORM or Object Lock.
 - Cookie mode is intended for browser operators. Bearer and API-key flows still matter for machine clients and automation.
+- The ECS starter assumes an existing VPC, subnets, image registry, RDS, Redis, KMS key, and secret store rather than provisioning a full AWS landing zone.
+- The ECS starter now separates web and background-task IAM/network posture from the API path, but it still leaves outbound egress broad by default and does not provide full service-by-service IAM hardening.
 
 ## 7. Relevant tests
 
 - `docker compose config`
 - `docker compose -f compose.prod.example.yml config`
+- `terraform -chdir=deploy/aws/ecs fmt -check`
+- `terraform -chdir=deploy/aws/ecs validate`
 - `python scripts/validate-deployment.py --help`
 - `python scripts/run-pilot-rehearsal.py --help`
 - `make verify-restore`
