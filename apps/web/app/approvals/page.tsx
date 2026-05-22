@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { PageShell } from "@/components/layout/page-shell";
 import { Badge } from "@/components/ui/badge";
@@ -60,14 +60,25 @@ function formatExecutionStatus(status: string | undefined) {
 
 export default function ApprovalsPage() {
   const { token } = useSession();
+  const [statusFilter, setStatusFilter] = useState("pending");
   const { data, loading, error, setData } = useAuthedQuery(
-    () => apiClient.listApprovals(token || "", "?status=pending"),
-    [token],
+    () => apiClient.listApprovals(token || "", statusFilter === "all" ? "" : `?status=${statusFilter}`),
+    [token, statusFilter],
     Boolean(token),
   );
   const [comments, setComments] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const status = new URLSearchParams(window.location.search).get("status");
+    if (status === "approved" || status === "rejected" || status === "pending") {
+      setStatusFilter(status);
+    }
+  }, []);
 
   async function handleApprove(id: string) {
     if (!token) {
@@ -118,6 +129,23 @@ export default function ApprovalsPage() {
       title="Approval Inbox"
       description="Review risky actions before they are allowed to proceed to enterprise tools."
     >
+      <Card className="mb-6">
+        <div className="grid gap-4 md:grid-cols-[220px_1fr] md:items-center">
+          <select
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="pending">Pending approvals</option>
+            <option value="approved">Approved requests</option>
+            <option value="rejected">Rejected requests</option>
+            <option value="all">All statuses</option>
+          </select>
+          <p className="text-sm text-slate-500">
+            Switch between pending, approved, and rejected requests to review the full governed decision trail.
+          </p>
+        </div>
+      </Card>
       {loading ? <Card><p className="text-sm text-slate-500">Loading approval queue...</p></Card> : null}
       {error ? <Card><p className="text-sm text-rose-700">{error}</p></Card> : null}
       {actionError ? <Card><p className="text-sm text-rose-700">{actionError}</p></Card> : null}

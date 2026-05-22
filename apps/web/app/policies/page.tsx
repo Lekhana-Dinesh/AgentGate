@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { PageShell } from "@/components/layout/page-shell";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,14 @@ import { useAuthedQuery } from "@/hooks/use-authed-query";
 import { useSession } from "@/hooks/use-session";
 import { ApiError, apiClient } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
-import type { Policy, PolicyCondition, PolicyConditionSet, PolicyDecision, PolicySeverity } from "@/types/api";
+import type {
+  Policy,
+  PolicyCondition,
+  PolicyConditionSet,
+  PolicyDecision,
+  PolicySeverity,
+  PolicySimulationResult,
+} from "@/types/api";
 
 type PolicyTemplateId =
   | "external_customer_visible"
@@ -37,6 +44,17 @@ type PolicyTemplate = {
   description: string;
   operatorNote: string;
   draft: PolicyDraft;
+};
+
+type PolicySimulationForm = {
+  agentId: string;
+  toolName: string;
+  actionName: string;
+  originalIntent: string;
+  targetHint: string;
+  resourceHint: string;
+  dataClassifications: string;
+  argumentsJson: string;
 };
 
 const POLICY_PACK_DOC_PATH = "docs/operations/pilot-policy-pack.md";
@@ -205,6 +223,29 @@ function formatConditionValue(value: string | number | boolean): string {
   return String(value);
 }
 
+function parseCommaSeparatedList(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function parseSimulationArguments(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const parsed = JSON.parse(trimmed);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("Arguments must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function describeRule(rule: PolicyCondition): string {
   const operatorLabel =
     rule.operator === "greater_than" ? ">" : rule.operator === "contains" ? "contains" : "=";
@@ -240,20 +281,65 @@ export default function PoliciesPage() {
   const { token, user } = useSession();
   const [selectedTemplateId, setSelectedTemplateId] = useState<PolicyTemplateId>(POLICY_TEMPLATES[0].id);
   const [draft, setDraft] = useState<PolicyDraft>(() => cloneDraft(POLICY_TEMPLATES[0].draft));
+  const [simulationDraft, setSimulationDraft] = useState<PolicySimulationForm>({
+    agentId: "",
+    toolName: "",
+    actionName: "read_account",
+    originalIntent: "Review internal account data for a routine sales follow-up.",
+    targetHint: "",
+    resourceHint: "",
+    dataClassifications: "customer_data",
+    argumentsJson: '{\n  "account_id": "acc_acme_001"\n}',
+  });
   const [creating, setCreating] = useState(false);
+  const [simulationRunning, setSimulationRunning] = useState(false);
   const [activePolicyId, setActivePolicyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [simulationError, setSimulationError] = useState<string | null>(null);
+  const [simulationResult, setSimulationResult] = useState<PolicySimulationResult | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const { data, loading, error, setData } = useAuthedQuery(
     () => apiClient.listPolicies(token || ""),
     [token],
     Boolean(token),
   );
+  const { data: agents, loading: agentsLoading, error: agentsError } = useAuthedQuery(
+    () => apiClient.listAgents(token || ""),
+    [token],
+    Boolean(token),
+  );
+  const { data: tools, loading: toolsLoading, error: toolsError } = useAuthedQuery(
+    () => apiClient.listToolSummaries(token || ""),
+    [token],
+    Boolean(token),
+  );
 
   const canManagePolicies = user?.role === "owner" || user?.role === "admin";
+  const canSimulatePolicies =
+    user?.role === "owner" || user?.role === "admin" || user?.role === "security_reviewer";
   const selectedTemplate = getTemplateById(selectedTemplateId);
   const draftPreview = useMemo(() => JSON.stringify(toPolicyPayload(draft), null, 2), [draft]);
+  const selectedSimulationTool =
+    (tools || []).find((item) => item.name === simulationDraft.toolName) || null;
+
+  useEffect(() => {
+    if (!agents?.length) {
+      return;
+    }
+    setSimulationDraft((current) =>
+      current.agentId ? current : { ...current, agentId: agents[0].id },
+    );
+  }, [agents]);
+
+  useEffect(() => {
+    if (!tools?.length) {
+      return;
+    }
+    setSimulationDraft((current) =>
+      current.toolName ? current : { ...current, toolName: tools[0].name },
+    );
+  }, [tools]);
 
   function loadTemplate(templateId: PolicyTemplateId) {
     const template = getTemplateById(templateId);
@@ -320,6 +406,50 @@ export default function PoliciesPage() {
       );
     } finally {
       setActivePolicyId(null);
+    }
+  }
+
+  async function handleRunSimulation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !canSimulatePolicies) {
+      return;
+    }
+
+    setSimulationRunning(true);
+    setSimulationError(null);
+    try {
+      if (!simulationDraft.agentId.trim()) {
+        throw new Error("Choose an agent before running a simulation.");
+      }
+      if (!simulationDraft.toolName.trim()) {
+        throw new Error("Choose a tool before running a simulation.");
+      }
+      const argumentsPayload = parseSimulationArguments(simulationDraft.argumentsJson);
+      const result = await apiClient.simulatePolicy(token, {
+        agent_id: simulationDraft.agentId,
+        original_intent: simulationDraft.originalIntent.trim(),
+        tool_name: simulationDraft.toolName.trim(),
+        tool_type: selectedSimulationTool?.type || null,
+        action_name: simulationDraft.actionName.trim(),
+        target_hint: simulationDraft.targetHint.trim() || null,
+        resource_hint: simulationDraft.resourceHint.trim() || null,
+        arguments: argumentsPayload,
+        data_classifications: parseCommaSeparatedList(simulationDraft.dataClassifications),
+        metadata: {},
+        dry_run: true,
+      });
+      setSimulationResult(result);
+    } catch (err) {
+      setSimulationResult(null);
+      setSimulationError(
+        err instanceof ApiError && err.requestId
+          ? `${err.message} Request ID: ${err.requestId}`
+          : err instanceof Error
+            ? err.message
+            : "Policy simulation failed.",
+      );
+    } finally {
+      setSimulationRunning(false);
     }
   }
 
@@ -529,6 +659,283 @@ export default function PoliciesPage() {
             <p className="mt-3 text-sm text-slate-500">
               This browser surface deliberately avoids a free-form JSON editor. For deeper edits, use the existing policy API or the documented pilot-pack scripts after review.
             </p>
+          </div>
+        </form>
+      </Card>
+
+      <Card className="mt-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Policy Simulation</p>
+            <h3 className="mt-3 text-xl font-semibold text-slate-950">Policy Simulation</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              Dry-run the policy outcome before you enable it. This advisory check reuses AgentGate&apos;s deterministic intent, risk, policy, and guardrail logic without executing any external tool action.
+            </p>
+          </div>
+          {user ? (
+            <Badge tone={canSimulatePolicies ? "active" : "degraded"}>
+              {canSimulatePolicies ? "Simulation available" : "Simulation restricted"}
+            </Badge>
+          ) : null}
+        </div>
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Simulation only. No external tool is executed, no approval is created, and no job is enqueued.
+        </div>
+        {simulationError ? (
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {simulationError}
+          </div>
+        ) : null}
+        {agentsError || toolsError ? (
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {agentsError || toolsError}
+          </div>
+        ) : null}
+        <form className="mt-6 grid gap-6 xl:grid-cols-[0.95fr_1.05fr]" onSubmit={handleRunSimulation}>
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label
+                  className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                  htmlFor="policy-simulation-agent"
+                >
+                  Agent
+                </label>
+                <select
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                  disabled={!canSimulatePolicies || agentsLoading || !(agents || []).length}
+                  id="policy-simulation-agent"
+                  onChange={(event) => setSimulationDraft((current) => ({ ...current, agentId: event.target.value }))}
+                  value={simulationDraft.agentId}
+                >
+                  {(agents || []).map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name} ({agent.environment})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label
+                  className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                  htmlFor="policy-simulation-tool"
+                >
+                  Tool
+                </label>
+                <select
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                  disabled={!canSimulatePolicies || toolsLoading || !(tools || []).length}
+                  id="policy-simulation-tool"
+                  onChange={(event) => setSimulationDraft((current) => ({ ...current, toolName: event.target.value }))}
+                  value={simulationDraft.toolName}
+                >
+                  {(tools || []).map((tool) => (
+                    <option key={tool.id} value={tool.name}>
+                      {tool.name} ({tool.type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label
+                className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                htmlFor="policy-simulation-action-name"
+              >
+                Action name
+              </label>
+              <Input
+                disabled={!canSimulatePolicies}
+                id="policy-simulation-action-name"
+                maxLength={255}
+                minLength={2}
+                onChange={(event) => setSimulationDraft((current) => ({ ...current, actionName: event.target.value }))}
+                required
+                value={simulationDraft.actionName}
+              />
+            </div>
+            <div>
+              <label
+                className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                htmlFor="policy-simulation-original-intent"
+              >
+                Original intent
+              </label>
+              <Textarea
+                disabled={!canSimulatePolicies}
+                id="policy-simulation-original-intent"
+                maxLength={2000}
+                onChange={(event) =>
+                  setSimulationDraft((current) => ({ ...current, originalIntent: event.target.value }))
+                }
+                required
+                value={simulationDraft.originalIntent}
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label
+                  className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                  htmlFor="policy-simulation-target-hint"
+                >
+                  Target hint
+                </label>
+                <Input
+                  disabled={!canSimulatePolicies}
+                  id="policy-simulation-target-hint"
+                  maxLength={255}
+                  onChange={(event) => setSimulationDraft((current) => ({ ...current, targetHint: event.target.value }))}
+                  placeholder="Optional target or recipient hint"
+                  value={simulationDraft.targetHint}
+                />
+              </div>
+              <div>
+                <label
+                  className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                  htmlFor="policy-simulation-resource-hint"
+                >
+                  Resource hint
+                </label>
+                <Input
+                  disabled={!canSimulatePolicies}
+                  id="policy-simulation-resource-hint"
+                  maxLength={255}
+                  onChange={(event) =>
+                    setSimulationDraft((current) => ({ ...current, resourceHint: event.target.value }))
+                  }
+                  placeholder="Optional resource hint"
+                  value={simulationDraft.resourceHint}
+                />
+              </div>
+            </div>
+            <div>
+              <label
+                className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                htmlFor="policy-simulation-data-classifications"
+              >
+                Data classifications
+              </label>
+              <Input
+                disabled={!canSimulatePolicies}
+                id="policy-simulation-data-classifications"
+                onChange={(event) =>
+                  setSimulationDraft((current) => ({ ...current, dataClassifications: event.target.value }))
+                }
+                placeholder="customer_data, confidential, customer_visible"
+                value={simulationDraft.dataClassifications}
+              />
+            </div>
+            <div>
+              <label
+                className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                htmlFor="policy-simulation-arguments-json"
+              >
+                Arguments JSON
+              </label>
+              <Textarea
+                className="font-mono text-xs text-slate-800"
+                disabled={!canSimulatePolicies}
+                id="policy-simulation-arguments-json"
+                onChange={(event) =>
+                  setSimulationDraft((current) => ({ ...current, argumentsJson: event.target.value }))
+                }
+                value={simulationDraft.argumentsJson}
+              />
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                disabled={
+                  simulationRunning ||
+                  !canSimulatePolicies ||
+                  agentsLoading ||
+                  toolsLoading ||
+                  !simulationDraft.agentId.trim() ||
+                  !simulationDraft.toolName.trim() ||
+                  simulationDraft.originalIntent.trim().length < 3 ||
+                  simulationDraft.actionName.trim().length < 2
+                }
+                type="submit"
+              >
+                {simulationRunning ? "Simulating..." : "Run policy simulation"}
+              </Button>
+              {!canSimulatePolicies ? (
+                <p className="text-sm text-slate-500">
+                  Simulation is limited to owner, admin, and security reviewer roles.
+                </p>
+              ) : null}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Simulated outcome</p>
+            {simulationResult ? (
+              <div className="mt-3 space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge tone={simulationResult.decision}>{formatDecisionLabel(simulationResult.decision)}</Badge>
+                    <Badge tone={simulationResult.risk_band}>{simulationResult.risk_band}</Badge>
+                    <Badge tone={simulationResult.approval_required ? "require_approval" : "allow"}>
+                      {simulationResult.approval_required ? "approval required" : "no approval"}
+                    </Badge>
+                    <Badge tone={simulationResult.intent.intent_match ? "active" : "warning"}>
+                      {simulationResult.intent.intent_match ? "intent aligned" : "intent mismatch"}
+                    </Badge>
+                  </div>
+                  <p className="mt-3 text-sm text-slate-700">{simulationResult.explanation}</p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Matched policies</p>
+                  {simulationResult.matched_policies.length ? (
+                    <div className="mt-3 space-y-2">
+                      {simulationResult.matched_policies.map((match, index) => (
+                        <div
+                          key={`${match.policy_id || "proposed"}:${match.name}:${index}`}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge tone={match.decision}>{formatDecisionLabel(match.decision)}</Badge>
+                            <Badge tone={match.severity}>{match.severity}</Badge>
+                            <Badge tone={match.source === "saved" ? "active" : "warning"}>{match.source}</Badge>
+                          </div>
+                          <p className="mt-2 text-sm font-medium text-slate-900">{match.name}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500">No policies matched. The result came from baseline risk and built-in guardrails only.</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Major decision factors</p>
+                  {simulationResult.major_decision_factors.length ? (
+                    <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                      {simulationResult.major_decision_factors.map((factor) => (
+                        <li key={factor} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+                          {factor}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500">No additional factors were surfaced beyond the advisory summary.</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Dry-run guarantees</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge tone="allow">no external execution</Badge>
+                    <Badge tone="allow">no approval created</Badge>
+                    <Badge tone="allow">no job enqueued</Badge>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                Run a dry run to see the simulated decision, risk band, matched policies, and operator explanation before changing live policy state.
+              </div>
+            )}
           </div>
         </form>
       </Card>

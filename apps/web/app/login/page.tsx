@@ -32,6 +32,7 @@ function formatSSOError(code: string | null): string | null {
 
 export default function LoginPage() {
   const { token, login, completeLogin } = useSession();
+  const [hydrated, setHydrated] = useState(false);
   const [email, setEmail] = useState("admin@demo.agentgate.example.com");
   const [password, setPassword] = useState("AgentGate123!");
   const [tenantSlug, setTenantSlug] = useState("demo-agentgate");
@@ -42,6 +43,10 @@ export default function LoginPage() {
   const [ssoLoading, setSSOLoading] = useState(false);
   const [ssoProcessing, setSSOProcessing] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     if (token) {
@@ -212,15 +217,15 @@ export default function LoginPage() {
             </p>
           ) : null}
 
-          <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
+          <form className="mt-8 space-y-4" method="post" noValidate onSubmit={handleSubmit}>
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="tenant-slug">
                 Tenant slug
               </label>
               <Input
                 autoComplete="organization"
+                disabled={!hydrated || loading || ssoProcessing}
                 id="tenant-slug"
-                name="tenant_slug"
                 value={tenantSlug}
                 onChange={(event) => setTenantSlug(event.target.value)}
               />
@@ -231,8 +236,8 @@ export default function LoginPage() {
               </label>
               <Input
                 autoComplete="email"
+                disabled={!hydrated || loading || ssoProcessing}
                 id="email"
-                name="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
@@ -244,15 +249,15 @@ export default function LoginPage() {
               </label>
               <Input
                 autoComplete="current-password"
+                disabled={!hydrated || loading || ssoProcessing}
                 id="password"
-                name="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 type="password"
               />
             </div>
             {error ? <p className="text-sm text-rose-700">{error}</p> : null}
-            <Button className="w-full" disabled={loading || ssoProcessing} type="submit">
+            <Button className="w-full" disabled={!hydrated || loading || ssoProcessing} type="submit">
               {loading ? "Signing in..." : "Sign in"}
             </Button>
           </form>

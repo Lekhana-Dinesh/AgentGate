@@ -25,6 +25,7 @@ import type {
   CurrentUser,
   DemoScenarioResponse,
   DashboardOverview,
+  GitHubGovernedDemoResponse,
   JobRecord,
   LoginPayload,
   LogoutResponse,
@@ -32,6 +33,8 @@ import type {
   OnboardingActionResponse,
   OnboardingStatus,
   Policy,
+  PolicySimulationRequest,
+  PolicySimulationResult,
   RetentionPurgeResponse,
   RetentionStatus,
   ScheduledTask,
@@ -168,8 +171,14 @@ export class AgentGateApiClient {
     });
   }
 
-  async getCurrentUser(token: string | null = COOKIE_SESSION_TOKEN): Promise<CurrentUser> {
-    return request<CurrentUser>("/v1/auth/me", { token });
+  async getCurrentUser(
+    token: string | null = COOKIE_SESSION_TOKEN,
+    options: { skipAuthRedirect?: boolean } = {},
+  ): Promise<CurrentUser> {
+    return request<CurrentUser>("/v1/auth/me", {
+      token,
+      skipAuthRedirect: options.skipAuthRedirect,
+    });
   }
 
   async getCsrfToken(): Promise<CSRFTokenResponse> {
@@ -410,6 +419,14 @@ export class AgentGateApiClient {
     });
   }
 
+  async simulatePolicy(token: string, payload: PolicySimulationRequest): Promise<PolicySimulationResult> {
+    return request<PolicySimulationResult>("/v1/policies/simulate", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listTraces(token: string): Promise<Trace[]> {
     return request<Trace[]>("/v1/traces", { token });
   }
@@ -583,6 +600,16 @@ export class AgentGateApiClient {
   async runSalesScenario(token: string): Promise<DemoScenarioResponse> {
     return request<DemoScenarioResponse>(
       "/v1/demo/run-sales-agent-risk-scenario",
+      {
+        method: "POST",
+        token,
+      },
+    );
+  }
+
+  async runGovernedGitHubScenario(token: string): Promise<GitHubGovernedDemoResponse> {
+    return request<GitHubGovernedDemoResponse>(
+      "/v1/demo/run-governed-github-workflow",
       {
         method: "POST",
         token,
