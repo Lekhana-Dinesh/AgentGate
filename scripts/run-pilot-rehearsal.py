@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,7 @@ MANUAL_FOLLOW_UPS = (
     "Run one production-style rehearsal against the real pilot deployment shape, not only local Docker Compose.",
     "Complete one isolated restore drill and record the actual RTO plus any manual recovery gaps.",
     "Verify audit-integrity status and the latest checkpoint range after restore or before pilot traffic.",
+    "Run the non-destructive recovery readiness check against the intended pilot env file before the restore drill or upgrade window.",
     "Dry-run or apply the pilot policy pack against the intended tenant after reviewing connector allowlists.",
     "Confirm real owner/admin and security reviewer staffing for the approval volume the pilot will generate.",
     "Freeze connector scope so GitHub stays first, Jira stays optional, and MCP stays disabled unless explicitly reviewed.",
@@ -37,7 +40,9 @@ REQUIRED_DOCS = (
     "docs/reviews/PILOT_SCOPE.md",
     "docs/go-to-market/PRE_PILOT_PREFLIGHT.md",
     "docs/operations/deployment-validation.md",
+    "docs/operations/self-hosted-evaluation.md",
     "docs/operations/backup-and-restore.md",
+    "docs/operations/production-runbook.md",
     "docs/operations/pilot-policy-pack.md",
     "docs/operations/api-evaluation.md",
     "docs/operations/observability-package.md",
@@ -54,6 +59,11 @@ OBSERVABILITY_FILES = (
     "observability/prometheus/prometheus.yml",
     "observability/prometheus/alert-rules.yml",
     "observability/grafana/agentgate-overview-dashboard.json",
+)
+
+RECOVERY_FILES = (
+    ".env.self-hosted-evaluation.example",
+    "scripts/check-recovery-readiness.py",
 )
 
 POLICY_PACK_PATH = "policy-packs/pilot-default/policies.json"
@@ -81,6 +91,7 @@ class CheckResult:
     name: str
     status: str
     detail: str
+    evidence: dict[str, Any] | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> RehearsalConfig:
@@ -154,6 +165,22 @@ def summarize_process_output(stdout: str, stderr: str) -> str:
     return combined_lines[-1]
 
 
+def extract_evidence_summary(stdout: str) -> dict[str, Any] | None:
+    for line in stdout.splitlines():
+        marker = "[evidence] "
+        if not line.startswith(marker):
+            continue
+        raw = line[len(marker) :].strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
 def run_python_command(
     name: str,
     script_path: str,
@@ -178,7 +205,12 @@ def run_python_command(
     )
     detail = summarize_process_output(completed.stdout, completed.stderr)
     status = "PASS" if completed.returncode == 0 else "FAIL"
-    return CheckResult(name=name, status=status, detail=detail)
+    return CheckResult(
+        name=name,
+        status=status,
+        detail=detail,
+        evidence=extract_evidence_summary(completed.stdout),
+    )
 
 
 def check_required_paths(name: str, relative_paths: tuple[str, ...]) -> CheckResult:
@@ -251,6 +283,14 @@ def print_summary(results: list[CheckResult]) -> None:
     print("Automated checks:")
     for result in results:
         print(f"- {format_result(result)}")
+    deployment_evidence = next((result.evidence for result in results if result.evidence), None)
+    summary_evidence = {
+        "repo_package": {result.name: result.status for result in results if result.name != "Live deployment validation"},
+        "live_deployment": deployment_evidence or {"status": "not_captured"},
+    }
+    print("")
+    print("Redacted evidence summary:")
+    print(json.dumps(summary_evidence, indent=2, sort_keys=True))
     print("")
     print("Required manual follow-ups before partner traffic:")
     for item in MANUAL_FOLLOW_UPS:
@@ -291,6 +331,7 @@ def run_rehearsal(config: RehearsalConfig) -> int:
         results.append(check_required_paths("Required docs", REQUIRED_DOCS))
         results.append(check_required_paths("API evaluation collection", API_COLLECTION_FILES))
         results.append(check_required_paths("Observability starter assets", OBSERVABILITY_FILES))
+        results.append(check_required_paths("Recovery readiness package", RECOVERY_FILES))
         results.append(check_required_paths("Pilot policy-pack artifact", (POLICY_PACK_PATH,)))
 
     live_result = live_validation_status(config)
