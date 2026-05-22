@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.self-hosted-evaluation.example
 *.env
 *.local
 .envrc
@@ -17,6 +18,12 @@ __pycache__/
 *.pyd
 .cache/
 .turbo/
+.terraform/
+.terraform.tfstate.lock.info
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
 
 .coverage
 coverage.xml
