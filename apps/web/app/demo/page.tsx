@@ -115,7 +115,7 @@ export default function DemoPage() {
                 {githubLoading ? "Running..." : "Run governed GitHub workflow"}
               </Button>
               <Badge tone="high">Approval-first</Badge>
-              <Badge tone="low">Demo-safe by default</Badge>
+              <Badge tone="low">Demo-safe connector required</Badge>
             </div>
             {githubError ? <p className="mt-4 text-sm text-rose-700">{githubError}</p> : null}
           </Card>
@@ -125,7 +125,11 @@ export default function DemoPage() {
               <Card>
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <h3 className="text-xl font-semibold text-slate-950">Governed run completed</h3>
+                    <h3 className="text-xl font-semibold text-slate-950">
+                      {githubResult.execution_mode === "queued" ? "Approved execution queued"
+                        : githubResult.trace_status === "completed" ? "Governed run completed"
+                        : "Governed run needs attention"}
+                    </h3>
                     <p className="mt-2 text-sm text-slate-500">
                       Trace status: <span className="font-semibold text-slate-700">{githubResult.trace_status}</span>.
                       {" "}
@@ -141,9 +145,11 @@ export default function DemoPage() {
                   </div>
                 </div>
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  {githubResult.no_live_external_call
-                    ? "Demo-safe execution is active. AgentGate completed the approved GitHub step without sending a live GitHub request."
-                    : "This run used the configured live GitHub connector path after approval. Review the trace and audit evidence before using it in a live environment."}
+                  {githubResult.execution_mode === "queued"
+                    ? "The worker will run the demo-safe GitHub step. Open the trace or approved request to check its outcome."
+                    : githubResult.execution_mode === "demo_safe_mock"
+                      ? "Demo-safe execution is active. AgentGate completed the approved GitHub step without sending a live GitHub request."
+                      : "Check the trace and approved request for the execution outcome."}
                 </div>
                 <div className="mt-5 flex flex-wrap gap-3 text-sm">
                   <Link className="font-semibold text-signal" href={githubResult.evidence_links.trace_path}>

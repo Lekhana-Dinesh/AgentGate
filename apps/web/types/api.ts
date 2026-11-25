@@ -980,7 +980,7 @@ export interface GitHubGovernedDemoResponse {
   };
   tool_call: ToolCall;
   audit_events: AuditEvent[];
-  execution_mode: "demo_safe_mock" | "live_connector" | "unsupported";
+  execution_mode: "demo_safe_mock" | "queued" | "live_connector" | "unsupported";
   no_live_external_call: boolean;
   evidence_links: {
     trace_path: string;

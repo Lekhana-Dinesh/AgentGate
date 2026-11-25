@@ -3,7 +3,7 @@
 import { ReactNode, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-import { Sidebar } from "@/components/layout/sidebar";
+import { MobileNavigation, Sidebar } from "@/components/layout/sidebar";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/hooks/use-session";
 
@@ -29,7 +29,7 @@ export function PageShell({
 
   if (loading) {
     return (
-      <div className="page-shell app-grid flex items-center justify-center text-slate-500">
+      <div role="status" className="page-shell app-grid flex items-center justify-center text-slate-500">
         Loading workspace...
       </div>
     );
@@ -40,22 +40,23 @@ export function PageShell({
   }
 
   return (
-    <div className="page-shell app-grid px-4 py-6 lg:px-6">
-      <div className="mx-auto flex w-full max-w-[1600px] gap-6">
+    <div className="page-shell app-grid px-3 py-4 sm:px-4 lg:px-6 lg:py-6">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 lg:flex-row lg:gap-6">
+        <MobileNavigation />
         <Sidebar />
         <main className="min-w-0 flex-1">
-          <div className="glass-panel mb-6 rounded-[2rem] px-6 py-5 shadow-panel">
+          <div className="glass-panel mb-5 rounded-3xl px-4 py-4 shadow-panel sm:px-6 sm:py-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                  {user.role.replace("_", " ")} / {user.email}
+                <p className="break-words text-xs font-medium text-slate-600">
+                  <span className="capitalize">{user.role.replaceAll("_", " ")}</span> · {user.email}
                 </p>
-                <h2 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+                <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
                   {title}
-                </h2>
+                </h1>
                 <p className="mt-2 max-w-3xl text-sm text-slate-500">{description}</p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 {actions}
                 <Button variant="ghost" onClick={logout}>
                   Sign out

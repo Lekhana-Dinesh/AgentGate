@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+import { e2eCredentials } from "./support/env";
 
 const strictSecretLikePatterns = [
   /AGENTGATE_[A-Z0-9_]+/,
@@ -33,31 +34,6 @@ async function expectNoSecretValues(locator: Locator) {
   for (const pattern of secretValuePatterns) {
     expect(text).not.toMatch(pattern);
   }
-}
-
-async function expectOneOf(page: Page, options: { heading?: string; text?: string }[]) {
-  for (const option of options) {
-    if (option.heading) {
-      const heading = page.getByRole("columnheader", { name: option.heading });
-      if (await heading.count()) {
-        await expect(heading).toBeVisible();
-        return;
-      }
-    }
-    if (option.text) {
-      const text = page.getByText(option.text);
-      if (await text.count()) {
-        await expect(text).toBeVisible();
-        return;
-      }
-    }
-  }
-  throw new Error(
-    `Expected one of the following page markers: ${options
-      .map((option) => option.heading || option.text)
-      .filter(Boolean)
-      .join(", ")}`,
-  );
 }
 
 test("onboarding renders checklist and links to the first governed workflow surfaces", async ({ page }) => {
@@ -218,15 +194,72 @@ test("governed GitHub demo shows approval, execution, and evidence without requi
   await page.goto("/demo", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByRole("heading", { name: "Governed GitHub workflow" })).toBeVisible();
-  await expect(page.getByText("Demo-safe by default")).toBeVisible();
+  await expect(page.getByText("Demo-safe connector required")).toBeVisible();
 
   await page.getByRole("button", { name: "Run governed GitHub workflow" }).click();
 
-  await expect(page.getByText("Governed run completed")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Governed run completed|Approved execution queued/ })).toBeVisible();
   await expect(page.getByText("Policy flagged the request before execution")).toBeVisible();
   await expect(page.getByText("Approved by reviewer@demo.agentgate.example.com")).toBeVisible();
   await expect(page.getByText("Operator-visible event trail")).toBeVisible();
-  await expect(page.getByText("Demo-safe execution is active.")).toBeVisible();
   await expect(page.getByRole("link", { name: "Open trace replay" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open approved request" })).toBeVisible();
+  await page.getByRole("link", { name: "Open trace replay" }).click();
+  await expect(page).toHaveURL(/\/traces\/[\w-]+$/);
+  await expect(async () => {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByText(/Approved execution completed for GitHub/)).toBeVisible({ timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
+});
+
+test("operator approves and rejects separate synthetic requests with trace evidence", async ({ page, request }) => {
+  test.setTimeout(60_000);
+  const api = process.env.AGENTGATE_E2E_API_BASE_URL || "http://127.0.0.1:8000";
+  const login = await request.post(`${api}/v1/auth/login`, { data: {
+    email: e2eCredentials.email,
+    password: e2eCredentials.password,
+    tenant_slug: e2eCredentials.tenantSlug,
+  } });
+  expect(login.ok()).toBeTruthy();
+  const { access_token } = await login.json();
+  const headers = { Authorization: `Bearer ${access_token}` };
+
+  for (const decision of ["approve", "reject"]) {
+    await page.goto("/demo");
+    await page.getByRole("button", { name: "Run sales workflow" }).click();
+    const traceLink = page.getByRole("link", { name: "Open trace", exact: true });
+    await expect(traceLink).toHaveAttribute("href", /^\/traces\/[\w-]+$/);
+    const tracePath = await traceLink.getAttribute("href");
+
+    await page.goto("/approvals");
+    const review = page.getByRole("article")
+      .filter({ has: page.locator(`a[href="${tracePath}"]`) })
+      .filter({ has: page.getByRole("heading", { name: "Email.send_external_email", exact: true }) });
+    const comment = decision === "approve" ? "Reviewed synthetic pricing." : "Keep synthetic pricing internal.";
+    await review.getByLabel("Reviewer comment (optional)").fill(comment);
+    await review.getByRole("button", { name: decision === "approve" ? "Approve and execute" : "Reject", exact: true }).click();
+    const approved = decision === "approve";
+    await expect(page.getByRole("status").filter({ hasText: approved ? "Request approved." : "Request rejected." })).toBeVisible();
+    await expect(review).toHaveCount(0);
+    await page.getByLabel("Request status").selectOption(approved ? "approved" : "rejected");
+    await expect(review.getByText(comment, { exact: true })).toBeVisible();
+    await review.getByRole("link", { name: "View trace" }).click();
+    await expect(page).toHaveURL(/\/traces\/[\w-]+$/);
+    await expect.poll(async () => {
+      const trace = await request.get(`${api}/v1${tracePath}`, { headers });
+      const { status, steps } = await trace.json();
+      const stepNumbers = steps.map((step: { step_number: number }) => step.step_number);
+      return {
+        status,
+        discountExecuted: steps.some((step: { content: string }) => step.content.includes("Approved execution completed for PricingDB")),
+        uniqueSteps: new Set(stepNumbers).size === stepNumbers.length,
+      };
+    }, { timeout: 15_000 }).toEqual({
+      status: approved ? "completed" : "blocked",
+      discountExecuted: true,
+      uniqueSteps: true,
+    });
+    await page.reload();
+    await expect(page.getByText(approved ? /Approved execution completed for Email/ : /Execution ended because the approval request was rejected/)).toBeVisible();
+  }
 });

@@ -47,3 +47,25 @@ test("sign out clears the browser session", async ({ page }) => {
   expect(sessionState.token).toBeNull();
   expect(sessionState.user).toBeNull();
 });
+
+test("mobile navigation opens by keyboard and closes after navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const menu = page.getByText("AgentGate menu", { exact: true });
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await expect(navigation).toHaveCount(0);
+  await menu.focus();
+  await menu.press("Enter");
+  await expect(navigation.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+  await menu.press("Escape");
+  await expect(menu).toBeFocused();
+  await expect(navigation).toHaveCount(0);
+
+  await menu.press("Enter");
+  await navigation.getByRole("link", { name: "Approvals" }).click();
+  await expect(page.getByRole("heading", { name: "Approval Inbox" })).toBeVisible();
+  await expect(navigation).toHaveCount(0);
+  await expect(page.getByLabel("Request status")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});

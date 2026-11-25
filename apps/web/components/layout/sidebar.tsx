@@ -2,62 +2,97 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/", label: "Overview" },
-  { href: "/onboarding", label: "Onboarding" },
-  { href: "/agents", label: "Agents" },
-  { href: "/tools", label: "Tools" },
-  { href: "/tool-calls", label: "Tool Calls" },
-  { href: "/approvals", label: "Approvals" },
-  { href: "/jobs", label: "Jobs" },
-  { href: "/audit-integrity", label: "Audit Integrity" },
-  { href: "/audit-exports", label: "Audit Exports" },
-  { href: "/retention", label: "Retention" },
-  { href: "/scheduled-tasks", label: "Scheduled Tasks" },
-  { href: "/users", label: "Users & Identity" },
-  { href: "/settings", label: "Settings" },
-  { href: "/policies", label: "Policies" },
-  { href: "/traces", label: "Traces" },
-  { href: "/audit", label: "Audit" },
-  { href: "/demo", label: "Demo" },
+const groups = [
+  { label: "Workspace", items: [
+    { href: "/", label: "Overview" },
+    { href: "/demo", label: "Demo" },
+    { href: "/onboarding", label: "Onboarding" },
+  ] },
+  { label: "Governance", items: [
+    { href: "/approvals", label: "Approvals" },
+    { href: "/agents", label: "Agents" },
+    { href: "/tools", label: "Tools" },
+    { href: "/policies", label: "Policies" },
+    { href: "/tool-calls", label: "Tool Calls" },
+    { href: "/traces", label: "Traces" },
+    { href: "/audit", label: "Audit" },
+  ] },
+  { label: "Operations", items: [
+    { href: "/jobs", label: "Jobs" },
+    { href: "/scheduled-tasks", label: "Scheduled Tasks" },
+    { href: "/audit-integrity", label: "Audit Integrity" },
+    { href: "/audit-exports", label: "Audit Exports" },
+    { href: "/retention", label: "Retention" },
+    { href: "/users", label: "Users & Identity" },
+    { href: "/settings", label: "Settings" },
+  ] },
 ];
 
-export function Sidebar() {
+function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <aside className="glass-panel sticky top-6 hidden h-[calc(100vh-3rem)] w-72 rounded-[2rem] p-6 shadow-panel lg:block">
-      <div className="rounded-3xl bg-slate-950 px-5 py-5 text-white">
-        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Agent Runtime</p>
-        <h1 className="mt-3 text-2xl font-semibold">AgentGate</h1>
-        <p className="mt-2 text-sm text-slate-300">
-          Runtime security and governance for enterprise AI agents.
-        </p>
-      </div>
+    <nav aria-label="Primary" className="grid gap-4">
+      {groups.map(({ label, items }) => (
+        <div key={label}>
+          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">{label}</p>
+          <ul className="grid gap-1">
+            {items.map(({ href, label: itemLabel }) => {
+              const active = pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
+              return (
+                <li key={href}>
+                  <Link href={href} onClick={onNavigate} aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "block rounded-xl px-3 py-2 text-sm font-medium transition",
+                      active ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-white/80",
+                    )}>
+                    {itemLabel}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  );
+}
 
-      <nav aria-label="Primary" className="mt-8 flex flex-col gap-2">
-        {navItems.map((item) => {
-          const active =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname === item.href || pathname.startsWith(`${item.href}/`);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "rounded-2xl px-4 py-3 text-sm font-medium transition",
-                active ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-white/80",
-              )}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
+export function Sidebar() {
+  return (
+    <aside className="glass-panel sticky top-6 hidden max-h-[calc(100dvh-3rem)] w-60 shrink-0 overflow-y-auto overscroll-contain rounded-3xl p-4 shadow-panel lg:block">
+      <p className="mb-5 rounded-2xl bg-slate-950 px-4 py-4 text-xl font-semibold text-white">AgentGate</p>
+      <Navigation />
     </aside>
+  );
+}
+
+export function MobileNavigation() {
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  const summary = useRef<HTMLElement>(null);
+
+  function close() {
+    if (disclosure.current?.open) {
+      disclosure.current.open = false;
+      summary.current?.focus();
+    }
+  }
+
+  return (
+    <details ref={disclosure} className="glass-panel rounded-2xl px-4 lg:hidden"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") close();
+      }}>
+      <summary ref={summary} className="cursor-pointer py-3 text-sm font-semibold text-slate-950">
+        AgentGate menu
+      </summary>
+      <div className="max-h-[55dvh] overflow-y-auto overscroll-contain pb-4">
+        <Navigation onNavigate={close} />
+      </div>
+    </details>
   );
 }

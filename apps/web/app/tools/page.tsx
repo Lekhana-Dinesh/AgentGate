@@ -471,8 +471,8 @@ function buildCreatePayload(draft: ToolMetadataDraft): ToolSafeMetadataCreateInp
 }
 
 function buildUpdatePayload(draft: ToolMetadataDraft): ToolSafeMetadataUpdateInput {
-  const createPayload = buildCreatePayload(draft);
-  const { type: _type, ...updates } = createPayload;
+  const updates: Partial<ToolSafeMetadataCreateInput> = buildCreatePayload(draft);
+  delete updates.type;
   return updates;
 }
 
