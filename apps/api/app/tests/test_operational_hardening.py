@@ -667,3 +667,22 @@ def test_request_logging_includes_safe_context_without_request_body_leakage(clie
     assert getattr(request_log, "path", None) == "/v1/auth/login"
     assert getattr(request_log, "status_code", None) == 401
     assert getattr(request_log, "error_code", None) == "invalid_credentials"
+
+
+def test_request_logging_uses_prefixed_template_without_path_or_query_values(client, caplog):
+    caplog.set_level(logging.INFO)
+    response = client.get(
+        "/v1/traces/synthetic-trace-identifier",
+        params={"filter": "synthetic-query-value"},
+        headers={"X-Request-ID": "req-route-template"},
+    )
+
+    assert response.status_code == 401
+    request_log = next(
+        record for record in caplog.records
+        if record.getMessage() == "request_completed"
+        and getattr(record, "request_id", None) == "req-route-template"
+    )
+    assert request_log.path == "/v1/traces/{trace_id}"
+    assert "synthetic-trace-identifier" not in str(request_log.__dict__)
+    assert "synthetic-query-value" not in str(request_log.__dict__)
