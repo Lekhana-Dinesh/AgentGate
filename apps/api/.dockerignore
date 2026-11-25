@@ -1,0 +1,9 @@
+**/__pycache__
+**/*.pyc
+*.db*
+.env*
+.venv
+.tmp
+.pytest_cache
+pytest-cache-files-*
+.pip-audit-cache

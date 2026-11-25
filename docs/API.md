@@ -190,6 +190,7 @@ MCP tool notes:
 
 - `GET /v1/policies`
 - `POST /v1/policies`
+- `POST /v1/policies/simulate`
 - `PUT /v1/policies/{policy_id}`
 
 Policy API notes:
@@ -197,10 +198,20 @@ Policy API notes:
 - The policy API is the current supported surface for tenant-scoped policy creation and updates.
 - `GET /v1/policies` returns the tenant policy set for the authenticated user.
 - `POST /v1/policies` and `PUT /v1/policies/{policy_id}` are limited to owner and admin roles.
+- `POST /v1/policies/simulate` is tenant-scoped and limited to owner, admin, and security reviewer roles.
 - The browser policy page uses the same APIs for safe starter-template creation and enable or disable changes; it does not bypass the normal policy routes.
+- The browser policy page also uses `POST /v1/policies/simulate` for advisory dry-run review before live policy changes.
 - The repo does not add a separate policy-import API for pilot packs. The pilot-pack helper script uses the existing `GET`, `POST`, and `PUT` policy endpoints.
 - Policy packs should stay conservative, reviewable, and free of secrets. They must not contain connector credentials, secret refs, env-var token names, or raw payload examples.
 - The shipped pilot default pack is intentionally approval-heavy and assumes operators will still review connector allowlists, trust classifications, and reviewer coverage before pilot traffic.
+
+Policy simulation notes:
+
+- `POST /v1/policies/simulate` accepts a proposed tool-call shape including `agent_id`, `tool_name`, optional `tool_type`, `action_name`, arguments, classification hints, and dry-run-only metadata hints.
+- The endpoint also accepts optional `policy_ids` for selected saved-policy simulation and optional `proposed_policies` for unsaved policy candidates.
+- The response returns the simulated decision, matched policies, intent status, risk band, risk factors, approval requirement, and operator-facing explanation.
+- The endpoint is advisory only: it does not execute a tool, create a `ToolCall`, create an approval, enqueue a job, mutate policy state, or write durable audit/tracing records in the current build.
+- A simulated allow result does not prove downstream connector reachability, third-party permissions, or business correctness.
 
 ## Gateway
 
@@ -475,7 +486,8 @@ Security API notes:
 
 - Env-token mode reads credentials from the environment variable named by `config.token_env_var`.
 - GitHub App mode signs a short-lived app JWT, exchanges it for an installation token, caches that installation token in memory only, and refreshes it before expiry.
-- The default demo seed still expects `AGENTGATE_GITHUB_TOKEN` if you want to exercise GitHub actions without reconfiguring the tool.
+- The seeded governed GitHub demo workflow uses `demo_safe_mock` by default, so that specific demo path does not require `AGENTGATE_GITHUB_TOKEN`.
+- Real GitHub execution still requires a properly configured auth mode plus the referenced runtime credentials, such as `AGENTGATE_GITHUB_TOKEN` for env-token mode.
 - Public repository comments can be routed to approval based on seeded policies and repository trust classification.
 - GitHub tools support `GET /v1/tools/{tool_id}/health` for local diagnostics and `?probe=true` for an optional safe upstream `GET /rate_limit` check.
 - Health responses can safely include `auth_provider`, `token_present`, `app_id`, `installation_id`, `private_key_env_var`, `private_key_reference_type`, token-cache metadata, repository allowlist counts, and warnings.

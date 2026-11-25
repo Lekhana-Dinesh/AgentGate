@@ -154,6 +154,17 @@ class DeploymentValidator:
         self.cookie_jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
         self.auth_session: AuthSession | None = None
+        self.tools_summary_cache: list[dict[str, Any]] | None = None
+        self.evidence: dict[str, Any] = {
+            "api": {},
+            "operator": {},
+            "jobs": {},
+            "workers": {},
+            "github_connectors": {},
+            "audit_integrity": {},
+            "metrics": {},
+            "warnings": [],
+        }
 
     def run(self) -> int:
         steps = [
@@ -165,8 +176,11 @@ class DeploymentValidator:
             ("Settings overview", self.check_settings_overview),
             ("Onboarding status", self.check_onboarding_status),
             ("Tools summary", self.check_tools_summary),
+            ("GitHub connector readiness", self.check_github_connector_readiness),
             ("Jobs list", self.check_jobs),
+            ("Worker status", self.check_worker_status),
             ("Audit integrity status", self.check_audit_integrity),
+            ("Audit integrity checkpoints", self.check_audit_integrity_checkpoints),
         ]
 
         if should_check_metrics(self.config.api_url, self.config.metrics_mode):
@@ -176,6 +190,12 @@ class DeploymentValidator:
                 detail = "Skipping /metrics because metrics validation was explicitly disabled."
             else:
                 detail = "Skipping /metrics because metrics mode is auto and the API URL is not loopback."
+            self.evidence["metrics"] = {
+                "checked": False,
+                "mode": self.config.metrics_mode,
+                "access_note": "internal_path_review_required",
+            }
+            self.append_warning("Metrics were not fetched directly. Confirm /metrics is still available on an internal-only operator path.")
             self.print_status(
                 "skip",
                 "Metrics",
@@ -187,6 +207,7 @@ class DeploymentValidator:
         for label, handler in steps:
             handler(label)
 
+        self.emit_evidence_summary()
         self.print_status("ok", "Summary", "Deployment validation completed successfully.")
         return EXIT_SUCCESS
 
@@ -302,6 +323,10 @@ class DeploymentValidator:
         data = self.parse_json(payload, label)
         if not isinstance(data, dict) or data.get("status") != "ok":
             raise ValidationFailure(f"{label} did not report status=ok.")
+        self.evidence["api"]["health"] = {
+            "status": str(data.get("status") or "unknown"),
+            "service": str(data.get("service") or "unknown"),
+        }
         self.print_status("ok", label, "API health endpoint returned ok.")
 
     def check_ready(self, label: str) -> None:
@@ -317,15 +342,23 @@ class DeploymentValidator:
         database_status = str(((checks.get("database") or {}).get("status")) or "unknown")
         keys_status = str(((checks.get("keys") or {}).get("status")) or "unknown")
         limiter_status = str(((checks.get("rate_limiter") or {}).get("status")) or "unknown")
+        scheduler_status = str(((checks.get("scheduler") or {}).get("status")) or "unknown")
         if payload.status_code != 200 or data.get("status") != "ready":
             raise ValidationFailure(
                 f"{label} reported {data.get('status', 'not_ready')} "
                 f"(database={database_status}, keys={keys_status}, rate_limiter={limiter_status})."
             )
+        self.evidence["api"]["ready"] = {
+            "status": str(data.get("status") or "unknown"),
+            "database": database_status,
+            "keys": keys_status,
+            "rate_limiter": limiter_status,
+            "scheduler": scheduler_status,
+        }
         self.print_status(
             "ok",
             label,
-            f"API readiness is ready (database={database_status}, keys={keys_status}, rate_limiter={limiter_status}).",
+            f"API readiness is ready (database={database_status}, keys={keys_status}, rate_limiter={limiter_status}, scheduler={scheduler_status}).",
         )
 
     def check_web_login_page(self, label: str) -> None:
@@ -377,6 +410,7 @@ class DeploymentValidator:
                 access_token=self.auth_session.access_token,
                 csrf_token=self.fetch_csrf_token(),
             )
+        self.evidence["operator"]["session_mode"] = self.auth_session.session_mode
         self.print_status("ok", label, f"Operator login succeeded using {self.auth_session.session_mode} session mode.")
 
     def fetch_csrf_token(self) -> str | None:
@@ -411,6 +445,26 @@ class DeploymentValidator:
         )
         return self.parse_json(payload, label)
 
+    def append_warning(self, message: str) -> None:
+        warnings = self.evidence.setdefault("warnings", [])
+        if isinstance(warnings, list) and message not in warnings:
+            warnings.append(message)
+
+    def emit_evidence_summary(self) -> None:
+        summary = redact_text(
+            json.dumps(self.evidence, sort_keys=True, separators=(",", ":")),
+            self.secrets,
+        )
+        print(f"[evidence] {summary}")
+
+    def get_tools_summary_data(self, label: str) -> list[dict[str, Any]]:
+        if self.tools_summary_cache is None:
+            data = self.authenticated_get("/v1/tools/summary", label)
+            if not isinstance(data, list):
+                raise ValidationFailure(f"{label} did not return a list.")
+            self.tools_summary_cache = [item for item in data if isinstance(item, dict)]
+        return self.tools_summary_cache
+
     def check_current_user(self, label: str) -> None:
         data = self.authenticated_get("/v1/auth/me", label)
         if not isinstance(data, dict):
@@ -418,12 +472,24 @@ class DeploymentValidator:
         if not data.get("is_active"):
             raise ValidationFailure("Authenticated operator account is not active.")
         role = str(data.get("role") or "unknown")
+        self.evidence["operator"] = {
+            **(self.evidence.get("operator") or {}),
+            "role": role,
+            "tenant_id_present": bool(data.get("tenant_id")),
+        }
         self.print_status("ok", label, f"Authenticated operator session is active (role={role}).")
 
     def check_settings_overview(self, label: str) -> None:
         data = self.authenticated_get("/v1/settings/overview", label)
         if not isinstance(data, dict) or not {"tenant", "keys", "rate_limiter"} <= set(data.keys()):
             raise ValidationFailure(f"{label} returned an unexpected shape.")
+        github_connectors = data.get("github_connectors") or {}
+        rate_limiter = data.get("rate_limiter") or {}
+        self.evidence["api"]["settings_overview"] = {
+            "tenant_status": str(((data.get("tenant") or {}).get("status")) or "unknown"),
+            "github_connector_status": str(github_connectors.get("status") or "unknown"),
+            "rate_limiter_status": str(rate_limiter.get("status") or "unknown"),
+        }
         self.print_status("ok", label, "Settings overview is reachable.")
 
     def check_onboarding_status(self, label: str) -> None:
@@ -433,22 +499,140 @@ class DeploymentValidator:
         self.print_status("ok", label, "Onboarding status is reachable.")
 
     def check_tools_summary(self, label: str) -> None:
-        data = self.authenticated_get("/v1/tools/summary", label)
-        if not isinstance(data, list):
-            raise ValidationFailure(f"{label} did not return a list.")
-        self.print_status("ok", label, f"Tools summary is reachable ({len(data)} connector record(s)).")
+        data = self.get_tools_summary_data(label)
+        github_count = sum(1 for item in data if str(item.get("type") or "") == "github")
+        self.evidence["api"]["tools_summary"] = {
+            "total_connectors": len(data),
+            "github_connectors": github_count,
+        }
+        self.print_status("ok", label, f"Tools summary is reachable ({len(data)} connector record(s), github={github_count}).")
+
+    def check_github_connector_readiness(self, label: str) -> None:
+        data = self.get_tools_summary_data("Tools summary")
+        github_tools = [item for item in data if str(item.get("type") or "") == "github"]
+        if not github_tools:
+            message = "No GitHub connectors are configured for this tenant, so live GitHub readiness checks were skipped."
+            self.evidence["github_connectors"] = {
+                "count": 0,
+                "status": "skipped",
+                "note": message,
+            }
+            self.print_status("skip", label, message)
+            return
+
+        connector_summaries: list[dict[str, Any]] = []
+        for connector in github_tools:
+            tool_id = str(connector.get("id") or "").strip()
+            if not tool_id:
+                continue
+            detail = self.authenticated_get(f"/v1/tools/{tool_id}/safe-detail", label)
+            if not isinstance(detail, dict):
+                raise ValidationFailure(f"{label} safe detail returned an unexpected shape for tool {tool_id}.")
+            health = self.authenticated_get(f"/v1/tools/{tool_id}/health?probe=true", label)
+            if not isinstance(health, dict):
+                raise ValidationFailure(f"{label} health probe returned an unexpected shape for tool {tool_id}.")
+            connector_summaries.append(
+                {
+                    "name": str(detail.get("name") or tool_id),
+                    "enabled": bool(detail.get("enabled")),
+                    "connector_mode": str(detail.get("connector_mode") or "unknown"),
+                    "live_execution_ready": bool(detail.get("live_execution_ready")),
+                    "health_status": str(detail.get("health_status") or "unknown"),
+                    "status_summary": str(detail.get("status_summary") or "").strip() or None,
+                    "probe_status": str(health.get("status") or "unknown"),
+                    "probe_performed": bool(health.get("probe_performed")),
+                    "can_connect": health.get("can_connect") if isinstance(health.get("can_connect"), bool) else None,
+                    "latest_probe_error": str((((detail.get("last_probe") or {}).get("error_summary")) or "")).strip() or None,
+                }
+            )
+        ready_count = sum(1 for item in connector_summaries if item["live_execution_ready"])
+        self.evidence["github_connectors"] = {
+            "count": len(connector_summaries),
+            "ready_connectors": ready_count,
+            "connectors": connector_summaries,
+        }
+        if ready_count == 0:
+            message = "GitHub connector detail and live probes are reachable, but no connector is fully live-ready yet."
+            self.append_warning(message)
+            self.print_status("warn", label, message)
+            return
+        self.print_status("ok", label, f"GitHub connector detail and live probe are reachable ({ready_count}/{len(connector_summaries)} live-ready).")
 
     def check_jobs(self, label: str) -> None:
         data = self.authenticated_get("/v1/jobs", label)
         if not isinstance(data, list):
             raise ValidationFailure(f"{label} did not return a list.")
+        self.evidence["jobs"] = {
+            "visible_jobs": len(data),
+        }
         self.print_status("ok", label, f"Jobs API is reachable ({len(data)} job record(s) visible).")
+
+    def check_worker_status(self, label: str) -> None:
+        data = self.authenticated_get("/v1/workers/status", label)
+        if not isinstance(data, dict):
+            raise ValidationFailure(f"{label} returned an unexpected shape.")
+        running_workers = int(data.get("running_workers") or 0)
+        total_workers = int(data.get("total_workers") or 0)
+        stale_workers = int(data.get("stale_workers") or 0)
+        stopped_workers = int(data.get("stopped_workers") or 0)
+        self.evidence["workers"] = {
+            "total_workers": total_workers,
+            "running_workers": running_workers,
+            "stale_workers": stale_workers,
+            "stopped_workers": stopped_workers,
+            "latest_heartbeat_at": data.get("latest_heartbeat_at"),
+        }
+        if running_workers < 1:
+            raise ValidationFailure(
+                f"{label} did not report an active worker (total={total_workers}, running={running_workers}, stale={stale_workers}, stopped={stopped_workers})."
+            )
+        self.print_status(
+            "ok",
+            label,
+            f"Worker status is healthy enough for operator review (running={running_workers}, stale={stale_workers}, stopped={stopped_workers}).",
+        )
 
     def check_audit_integrity(self, label: str) -> None:
         data = self.authenticated_get("/v1/audit-integrity/status", label)
         if not isinstance(data, dict) or "status" not in data or "chain_scope" not in data:
             raise ValidationFailure(f"{label} returned an unexpected shape.")
+        self.evidence["audit_integrity"]["status"] = {
+            "status": str(data.get("status") or "unknown"),
+            "chain_scope": str(data.get("chain_scope") or "unknown"),
+            "total_events": int(data.get("total_events") or 0),
+            "anchored_events": int(data.get("anchored_events") or 0),
+            "latest_sequence_number": data.get("latest_sequence_number"),
+        }
         self.print_status("ok", label, f"Audit integrity status is reachable (status={data['status']}).")
+
+    def check_audit_integrity_checkpoints(self, label: str) -> None:
+        data = self.authenticated_get("/v1/audit-integrity/checkpoints", label)
+        if not isinstance(data, list):
+            raise ValidationFailure(f"{label} did not return a list.")
+        if not data:
+            message = "Audit-integrity checkpoint history is reachable, but no checkpoint documents exist yet."
+            self.evidence["audit_integrity"]["checkpoints"] = {
+                "count": 0,
+                "status": "none_recorded",
+            }
+            self.append_warning(message)
+            self.print_status("warn", label, message)
+            return
+        latest = data[0] if isinstance(data[0], dict) else {}
+        self.evidence["audit_integrity"]["checkpoints"] = {
+            "count": len(data),
+            "latest_status": str(latest.get("status") or "unknown"),
+            "latest_type": str(latest.get("checkpoint_type") or "unknown"),
+            "latest_range": {
+                "from_sequence_number": latest.get("from_sequence_number"),
+                "to_sequence_number": latest.get("to_sequence_number"),
+            },
+        }
+        self.print_status(
+            "ok",
+            label,
+            f"Audit-integrity checkpoint history is reachable ({len(data)} checkpoint record(s), latest={latest.get('status', 'unknown')}).",
+        )
 
     def check_metrics(self, label: str) -> None:
         payload = self.request(
@@ -459,6 +643,18 @@ class DeploymentValidator:
         body = payload.body.decode("utf-8", errors="replace")
         if "agentgate_http_requests_total" not in body:
             raise ValidationFailure("/metrics did not contain the expected AgentGate metric prefix.")
+        hostname = (urllib.parse.urlparse(self.config.api_url).hostname or "").strip().lower()
+        loopback = hostname in {"127.0.0.1", "localhost", "::1"}
+        self.evidence["metrics"] = {
+            "checked": True,
+            "mode": self.config.metrics_mode,
+            "access_note": "loopback_checked" if loopback else "non_loopback_checked",
+        }
+        if not loopback:
+            message = "Metrics endpoint is reachable from a non-loopback path. Confirm this remains an internal or explicitly controlled operator route."
+            self.append_warning(message)
+            self.print_status("warn", label, message)
+            return
         self.print_status("ok", label, "Metrics endpoint is reachable.")
 
     def check_logout(self, label: str) -> None:
@@ -497,6 +693,7 @@ class DeploymentValidator:
         prefix = {
             "ok": "[ok]",
             "skip": "[skip]",
+            "warn": "[warn]",
             "fail": "[fail]",
         }.get(level, "[info]")
         print(f"{prefix} {label}: {detail}")

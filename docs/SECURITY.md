@@ -45,6 +45,7 @@ The platform focuses on runtime control and governance, not on claiming perfect 
 - API key expirations, revocation timestamps, and scope checks for gateway invocation
 - Agent API key lifecycle APIs and browser UI now use metadata-only list responses plus one-time raw secret display at creation
 - Policy authoring remains deterministic and tenant-scoped, with browser-side starter templates and enable or disable controls routed through the existing policy APIs instead of a separate engine path
+- Policy simulation now reuses the same deterministic intent, risk, policy, and guardrail logic for dry-run review without executing tools, creating approvals, enqueuing jobs, or writing durable gateway state
 - Structured input validation with Pydantic
 - Centralized exception handling without stack trace leakage
 - Security headers and scoped CORS configuration
@@ -102,6 +103,7 @@ The platform focuses on runtime control and governance, not on claiming perfect 
 - Onboarding is intentionally narrow: it does not provision external integrations, manage secrets, or replace the existing admin APIs for agents, tools, identity, or settings
 - Tool management in the browser is intentionally narrow: the current `/tools` page can review and edit non-secret metadata for a small connector set, but it still does not edit secret-backed connector configuration or accept raw credentials
 - Policy management in the browser is intentionally narrow: guided starter creation, JSON preview, and enable or disable only, with deeper edits and policy-pack apply workflows remaining API or script driven
+- Policy simulation is advisory only: it helps operators preview likely outcomes, but it does not prove downstream connector success, permissions, or business safety
 - Operational browser controls are intentionally narrow: scheduled-task creation, detailed audit-export destination editing, secret wiring, and real retention purge policy changes remain outside the settings UI
 - Slack configuration is environment-scoped in this build; there is no tenant-managed Slack app installation flow yet
 - Slack notifications are outbound alerts only. There is no signed interactive Slack approval flow in this version

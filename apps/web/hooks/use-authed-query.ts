@@ -42,6 +42,8 @@ export function useAuthedQuery<T>(
     return () => {
       cancelled = true;
     };
+    // Callers supply the query inputs because the loader is recreated on render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, ...dependencies]);
 
   return { data, loading, error, setData };

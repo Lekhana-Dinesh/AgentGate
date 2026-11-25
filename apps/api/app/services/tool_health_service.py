@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.enums import AuditActorType, JobType, ToolType
-from app.models import Job, Tool
+from app.models import AuditEvent, Job, Tool
+from app.models.base import utcnow
 from app.schemas.tool import ToolHealthResponse
 from app.services.audit_service import AuditService
 from app.services.job_service import JobProcessingError, JobService
@@ -14,6 +18,17 @@ from app.tools.mcp_adapter import MCPToolAdapter
 
 CONNECTOR_HEALTH_CHECK_QUEUED_EVENT = "connector_health_check.queued"
 CONNECTOR_HEALTH_CHECK_COMPLETED_EVENT = "connector_health_check.completed"
+CONNECTOR_HEALTH_PROBE_RECORDED_EVENT = "connector_health_probe.recorded"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolProbeObservation:
+    status: str
+    checked_at: datetime
+    probe_performed: bool
+    can_connect: bool | None = None
+    error_summary: str | None = None
+    source: str | None = None
 
 
 class ToolHealthService:
@@ -98,6 +113,107 @@ class ToolHealthService:
             probe_performed=result.get("probe_performed", False),
             can_connect=result.get("can_connect"),
             details=details,
+        )
+
+    def record_probe_observation(
+        self,
+        db: Session,
+        *,
+        tenant_id: str,
+        tool,
+        response: ToolHealthResponse,
+        actor_type: AuditActorType,
+        actor_id: str | None,
+        ip_address: str | None,
+        source: str = "manual_probe",
+    ) -> ToolProbeObservation:
+        observation = self._observation_from_response(response=response, checked_at=utcnow(), source=source)
+        self.audit_service.create_event(
+            db,
+            tenant_id=tenant_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            event_type=CONNECTOR_HEALTH_PROBE_RECORDED_EVENT,
+            resource_type="tool",
+            resource_id=tool.id,
+            metadata={
+                "tool_name": tool.name,
+                "tool_type": tool.type.value,
+                "status": observation.status,
+                "probe_performed": observation.probe_performed,
+                "can_connect": observation.can_connect,
+                "error_summary": observation.error_summary,
+                "source": source,
+            },
+            ip_address=ip_address,
+        )
+        return observation
+
+    def get_latest_probe_observations(
+        self,
+        db: Session,
+        *,
+        tenant_id: str,
+        tool_id: str,
+    ) -> tuple[ToolProbeObservation | None, datetime | None, datetime | None, str | None]:
+        observations: list[ToolProbeObservation] = []
+
+        event_rows = list(
+            db.scalars(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.tenant_id == tenant_id,
+                    AuditEvent.event_type == CONNECTOR_HEALTH_PROBE_RECORDED_EVENT,
+                    AuditEvent.resource_type == "tool",
+                    AuditEvent.resource_id == tool_id,
+                )
+                .order_by(AuditEvent.created_at.desc())
+                .limit(25)
+            )
+        )
+        for event in event_rows:
+            metadata = dict(event.metadata_json or {})
+            status = str(metadata.get("status") or "").strip()
+            if status not in {"ready", "degraded", "unconfigured", "unsupported"}:
+                continue
+            observations.append(
+                ToolProbeObservation(
+                    status=status,
+                    checked_at=event.created_at,
+                    probe_performed=bool(metadata.get("probe_performed")),
+                    can_connect=metadata.get("can_connect")
+                    if isinstance(metadata.get("can_connect"), bool)
+                    else None,
+                    error_summary=str(metadata.get("error_summary") or "").strip() or None,
+                    source=str(metadata.get("source") or "").strip() or "manual_probe",
+                )
+            )
+
+        job_rows = list(
+            db.scalars(
+                select(Job)
+                .where(
+                    Job.tenant_id == tenant_id,
+                    Job.job_type == JobType.CONNECTOR_HEALTH_CHECK_PLACEHOLDER,
+                )
+                .order_by(Job.created_at.desc())
+                .limit(25)
+            )
+        )
+        for job in job_rows:
+            observation = self._observation_from_job(job=job, tool_id=tool_id)
+            if observation is not None:
+                observations.append(observation)
+
+        if not observations:
+            return None, None, None, None
+
+        observations.sort(key=lambda item: item.checked_at, reverse=True)
+        latest = observations[0]
+        latest_success = next((item.checked_at for item in observations if item.status == "ready"), None)
+        latest_failure = next((item for item in observations if item.status != "ready"), None)
+        return latest, latest_success, latest_failure.checked_at if latest_failure else None, (
+            latest_failure.error_summary if latest_failure else None
         )
 
     def enqueue_connector_health_check_job(
@@ -190,3 +306,82 @@ class ToolHealthService:
             },
             ip_address=str(payload.get("ip_address") or "").strip() or None,
         )
+
+    def _observation_from_response(
+        self,
+        *,
+        response: ToolHealthResponse,
+        checked_at: datetime,
+        source: str,
+    ) -> ToolProbeObservation:
+        details = dict(response.details or {})
+        error_summary = self._extract_error_summary(
+            status=response.status,
+            probe_performed=response.probe_performed,
+            can_connect=response.can_connect,
+            details=details,
+        )
+        return ToolProbeObservation(
+            status=response.status,
+            checked_at=checked_at,
+            probe_performed=response.probe_performed,
+            can_connect=response.can_connect,
+            error_summary=error_summary,
+            source=source,
+        )
+
+    def _observation_from_job(self, *, job: Job, tool_id: str) -> ToolProbeObservation | None:
+        payload = dict(job.payload or {})
+        result = dict(payload.get("result") or {})
+        rows = result.get("results")
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("tool_id") or "").strip() != tool_id:
+                continue
+            status = str(row.get("status") or "").strip()
+            if status not in {"ready", "degraded", "unconfigured", "unsupported"}:
+                return None
+            details = dict(row.get("details") or {})
+            checked_at = job.completed_at or job.updated_at or job.created_at
+            return ToolProbeObservation(
+                status=status,
+                checked_at=checked_at,
+                probe_performed=bool(row.get("probe_performed")),
+                can_connect=row.get("can_connect") if isinstance(row.get("can_connect"), bool) else None,
+                error_summary=self._extract_error_summary(
+                    status=status,
+                    probe_performed=bool(row.get("probe_performed")),
+                    can_connect=row.get("can_connect") if isinstance(row.get("can_connect"), bool) else None,
+                    details=details,
+                ),
+                source="health_check_job",
+            )
+        return None
+
+    def _extract_error_summary(
+        self,
+        *,
+        status: str,
+        probe_performed: bool,
+        can_connect: bool | None,
+        details: dict,
+    ) -> str | None:
+        explicit = str(details.get("error_detail") or "").strip()
+        if explicit:
+            return explicit
+        warnings = details.get("warnings")
+        if isinstance(warnings, list):
+            for item in warnings:
+                message = str(item or "").strip()
+                if message:
+                    return message
+        if status == "ready":
+            return None
+        if probe_performed and can_connect is False:
+            return "The latest live connector probe could not reach the upstream service successfully."
+        if status == "unconfigured":
+            return "The latest connector probe could not run a live check because required live credentials are not configured."
+        if status == "unsupported":
+            return "This connector type does not support a live health probe in the current build."
+        return "The latest connector probe still needs operator attention before live use."

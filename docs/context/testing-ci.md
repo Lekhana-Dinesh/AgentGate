@@ -10,6 +10,7 @@ This file summarizes AgentGate's verification commands, CI gates, security scann
 - `.github/workflows/quality-security.yml`
 - `.github/workflows/secret-scan.yml`
 - `.github/workflows/e2e-manual.yml`
+- `.github/workflows/terraform-ecs-validate.yml`
 - `Makefile`
 - `scripts/check-no-live-secrets.py`
 - `scripts/validate-deployment.py`
@@ -29,6 +30,8 @@ This file summarizes AgentGate's verification commands, CI gates, security scann
 - Internal pilot rehearsal wrapper that reuses the secret scan, pilot policy-pack validator, deployment validator, and artifact presence checks
 - Repo secret-surface checking for docs, config, and workflow changes
 - Deployment validation help and Compose validation for operator-facing deployment tooling changes
+- A dedicated Linux GitHub Actions path for `deploy/aws/ecs` Terraform `fmt -check`, `init -backend=false`, and `validate` without AWS credentials
+- Optional local Terraform format and validation helpers for the ECS/Fargate deployment starter
 
 ## 4. Critical invariants / must-not-break rules
 
@@ -52,6 +55,7 @@ This file summarizes AgentGate's verification commands, CI gates, security scann
 - Playwright is opt-in and not part of the default blocking PR path, even though the manual suite now covers more operator pages.
 - The API evaluation collection is for manual reviewer workflows, not a CI or smoke-test replacement.
 - k6 scripts are regression tripwires, not production capacity proof.
+- The Terraform ECS validation workflow proves module syntax and provider-schema compatibility on Linux, not AWS account readiness or deployment safety.
 - There is no full visual-regression or cross-browser matrix.
 
 ## 7. Relevant tests
@@ -62,6 +66,9 @@ This file summarizes AgentGate's verification commands, CI gates, security scann
 - `python scripts/check-no-live-secrets.py`
 - `python scripts/validate-deployment.py --help`
 - `python scripts/run-pilot-rehearsal.py --help`
+- `make aws-ecs-fmt`
+- `make aws-ecs-validate`
+- `.github/workflows/terraform-ecs-validate.yml`
 
 ## 8. When future Codex sessions should read this file
 

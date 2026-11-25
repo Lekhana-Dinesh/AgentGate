@@ -23,12 +23,25 @@ The validator checks:
 - `GET /v1/settings/overview`
 - `GET /v1/onboarding/status`
 - `GET /v1/tools/summary`
+- `GET /v1/tools/{tool_id}/safe-detail` for configured GitHub connectors
+- `GET /v1/tools/{tool_id}/health?probe=true` for configured GitHub connectors
 - `GET /v1/jobs`
+- `GET /v1/workers/status`
 - `GET /v1/audit-integrity/status`
+- `GET /v1/audit-integrity/checkpoints`
 - `GET /metrics` when metrics validation is enabled or auto-detected as local-only
 - `POST /v1/auth/logout`
 
 For cookie-session mode it also confirms that logout clears the browser session cookie. For token mode it validates that the logout endpoint is reachable, while honestly noting that bearer-token mode stays stateless.
+
+When GitHub connectors exist, the validator now also captures a redacted evidence summary that includes:
+
+- API health and readiness posture
+- worker availability
+- GitHub connector mode and live-readiness posture
+- GitHub read-only health-probe outcome
+- audit-integrity status and checkpoint posture
+- metrics access notes and warnings
 
 ## Required Environment Variables
 
@@ -101,6 +114,8 @@ Successful output looks like a short checklist:
 
 Failures are concise and avoid printing tokens, cookies, or passwords.
 
+The validator also emits a single redacted `[evidence]` JSON line near the end of the run so rehearsal wrappers can preserve a safe operator-facing evidence snapshot without leaking credentials.
+
 Exit codes:
 
 - `0` success
@@ -136,12 +151,15 @@ The full recovery flow is documented in `docs/operations/backup-and-restore.md`.
 
 The script does not:
 
-- validate GitHub, Jira, MCP, Slack, OIDC, SCIM, or AWS connectivity
-- create checkpoints, run retention purge, or trigger connector probes
+- validate Jira, MCP, Slack, OIDC, SCIM, or AWS connectivity
+- run write actions against GitHub or other external systems
+- create checkpoints or run retention purge
 - prove worker job throughput or scheduler liveness
 - prove `/metrics` should be public
 - replace full runbook checks, load tests, browser E2E, or external monitoring
 - replace restore-drill review of audit checkpoints, worker status, or external anchor retention
+
+The GitHub-specific checks are still narrow. They only review safe detail metadata and a read-only health probe when GitHub connectors are already configured for the tenant.
 
 ## Limitations
 

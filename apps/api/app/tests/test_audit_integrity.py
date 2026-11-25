@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 import httpx
 
+from app.audit import integrity
 from app.core.enums import AuditActorType
 from app.models import AuditEvent
 from app.models.base import utcnow
 from app.services.audit_export_service import AuditExportDispatcher
-from app.services.audit_integrity_service import AuditIntegrityService
+from app.services.audit_integrity_service import AuditIntegrityService, VerificationBounds
 from app.services.audit_service import AuditService
 from app.tests.conftest import make_token
 
@@ -98,6 +100,33 @@ def test_tampered_audit_metadata_is_detected(db_session, seeded_tenants):
 
     assert result.status == "broken"
     assert any(issue.code == "event_hash_mismatch" for issue in result.issues)
+
+
+def test_audit_chain_uses_append_order_when_a_later_write_has_an_earlier_timestamp(
+    db_session, seeded_tenants, monkeypatch,
+):
+    first = _create_audit_event(db_session, seeded_tenants, note="first")
+    older_time = utcnow() - timedelta(days=1)
+    monkeypatch.setattr(integrity, "utcnow", lambda: older_time)
+    second = _create_audit_event(db_session, seeded_tenants, note="second")
+    tenant_id = seeded_tenants["tenant_a"].id
+    service = AuditIntegrityService()
+
+    assert second.created_at < first.created_at
+    assert service.get_status(db_session, tenant_id=tenant_id).latest_event_id == second.id
+    verified = service.verify_chain(db_session, tenant_id=tenant_id)
+    assert verified.status == "verified"
+    assert verified.last_verified_event_id == second.id
+
+    bounded = service.verify_chain(
+        db_session,
+        tenant_id=tenant_id,
+        bounds=VerificationBounds(end_date=older_time + timedelta(hours=1)),
+    )
+    assert bounded.status == "verified"
+    assert bounded.verified_events == 1
+    assert bounded.first_verified_event_id == second.id
+    assert service.backfill_chain(db_session, tenant_id=tenant_id, dry_run=True).rebuilt_events == 0
 
 
 def test_deleted_audit_event_is_detected_as_a_broken_chain(db_session, seeded_tenants):

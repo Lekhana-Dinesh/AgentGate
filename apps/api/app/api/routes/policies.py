@@ -9,11 +9,19 @@ from app.core.enums import AuditActorType, UserRole
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import Policy
-from app.schemas.policy import PolicyCreate, PolicyResponse, PolicyUpdate
+from app.schemas.policy import (
+    PolicyCreate,
+    PolicyResponse,
+    PolicySimulationRequest,
+    PolicySimulationResponse,
+    PolicyUpdate,
+)
 from app.services.audit_service import AuditService
+from app.services.gateway_service import GatewayService
 
 router = APIRouter()
 audit_service = AuditService()
+gateway_service = GatewayService()
 
 
 @router.get("", response_model=list[PolicyResponse])
@@ -33,6 +41,19 @@ def list_policies(
         )
     )
     return [PolicyResponse.model_validate(item) for item in policies]
+
+
+@router.post("/simulate", response_model=PolicySimulationResponse)
+def simulate_policy(
+    payload: PolicySimulationRequest,
+    current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.SECURITY_REVIEWER)),
+    db: Session = Depends(get_db),
+) -> PolicySimulationResponse:
+    return gateway_service.simulate_policy_decision(
+        db,
+        current_user=current_user,
+        payload=payload,
+    )
 
 
 @router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED)

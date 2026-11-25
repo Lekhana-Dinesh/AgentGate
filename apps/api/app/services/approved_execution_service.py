@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.core.enums import AuditActorType, JobStatus, JobType, ToolCallStatus, TraceStatus, TraceStepType
+from app.core.enums import AuditActorType, JobStatus, JobType, ToolCallStatus, ToolType, TraceStatus, TraceStepType
 from app.core.errors import AppError
 from app.core.retention import PAYLOAD_REDACTION_STATUS_PURGED, is_purged_execution_payload
-from app.models import ApprovalRequest, Job, Tool, ToolCall, User
+from app.models import ApprovalRequest, ExecutionTrace, Job, Tool, ToolCall, User
+from app.schemas.demo import GITHUB_DEMO_SCENARIO
 from app.schemas.job import ApprovalExecutionStatus, serialize_job_summary
 from app.services.audit_service import AuditService
 from app.services.job_service import JobService, JobProcessingError
@@ -136,7 +137,8 @@ class ApprovedExecutionService:
             )
 
         trace_id = tool_call.trace_id or tool_call.request_payload.get("trace_id")
-        trace_finalize = bool((tool_call.request_payload.get("metadata") or {}).get("trace_finalize"))
+        metadata = tool_call.request_payload.get("metadata") or {}
+        trace_finalize = bool(metadata.get("trace_finalize"))
 
         try:
             tool = db.scalar(
@@ -147,6 +149,14 @@ class ApprovedExecutionService:
             )
             if not tool:
                 raise AppError("Tool not found for approval execution.", status_code=404, code="tool_not_found")
+            if metadata.get("scenario") == GITHUB_DEMO_SCENARIO and (
+                tool.type != ToolType.GITHUB or (tool.config or {}).get("demo_safe_mock") is not True
+            ):
+                raise AppError(
+                    "The GitHub demo requires the seeded demo-safe connector.",
+                    status_code=409,
+                    code="demo_safe_connector_required",
+                )
 
             execution_payload = tool_call.request_payload.get(
                 "execution_arguments",
@@ -225,11 +235,15 @@ class ApprovedExecutionService:
                         metadata={"approval_id": approval.id, "tool_call_id": tool_call.id, "job_id": job.id},
                     )
                 else:
-                    self.trace_service.set_status(
-                        db,
-                        trace_id=trace_id,
-                        status=TraceStatus.RUNNING,
-                        summary="Approval granted and tool execution completed for this step.",
+                    # A subsequent step may already be waiting for a different approval.
+                    db.execute(
+                        update(ExecutionTrace)
+                        .where(
+                            ExecutionTrace.id == trace_id,
+                            ExecutionTrace.tenant_id == job.tenant_id,
+                            ExecutionTrace.status == TraceStatus.RUNNING,
+                        )
+                        .values(summary="Approval granted and tool execution completed for this step.")
                     )
 
             self.audit_service.create_event(

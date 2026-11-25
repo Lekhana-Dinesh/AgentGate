@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,6 +37,17 @@ class VerificationBounds:
     end_date: datetime | None = None
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _anchored_chain_order(events: list[AuditEvent]) -> list[AuditEvent]:
+    return sorted(
+        (event for event in events if is_audit_event_anchored(event)),
+        key=lambda event: event.sequence_number,
+    )
+
+
 class AuditIntegrityService:
     def __init__(self) -> None:
         self.audit_service = AuditService()
@@ -55,7 +66,7 @@ class AuditIntegrityService:
     ) -> AuditIntegrityVerifyResponse:
         bounds = bounds or VerificationBounds()
         all_events = self._ordered_events(db, tenant_id=tenant_id)
-        anchored_events = [event for event in all_events if is_audit_event_anchored(event)]
+        anchored_events = _anchored_chain_order(all_events)
         legacy_events = [event for event in all_events if not is_audit_event_anchored(event)]
         chain_scope = build_audit_chain_scope(tenant_id)
         latest_anchored = anchored_events[-1] if anchored_events else None
@@ -217,6 +228,8 @@ class AuditIntegrityService:
         chain_scope = build_audit_chain_scope(tenant_id)
         anchored_before = sum(1 for event in events if is_audit_event_anchored(event))
         legacy_before = len(events) - anchored_before
+        if not legacy_before:
+            events = _anchored_chain_order(events)
 
         previous_hash: str | None = None
         latest_event = None
@@ -392,7 +405,7 @@ class AuditIntegrityService:
         )
 
     def _build_status(self, *, tenant_id: str, events: list[AuditEvent]) -> AuditIntegrityStatusResponse:
-        anchored_events = [event for event in events if is_audit_event_anchored(event)]
+        anchored_events = _anchored_chain_order(events)
         legacy_count = len(events) - len(anchored_events)
         latest_anchored = anchored_events[-1] if anchored_events else None
         if not events:
@@ -445,20 +458,17 @@ class AuditIntegrityService:
                 event_id=bounds.end_event_id,
             )
             boundary_limited = True
-        if bounds.start_date:
-            for index, event in enumerate(anchored_events):
-                if event.created_at >= bounds.start_date:
-                    start_index = max(start_index, index)
-                    break
-            else:
-                start_index = len(anchored_events)
-            boundary_limited = True
-        if bounds.end_date:
-            matching_index = -1
-            for index, event in enumerate(anchored_events):
-                if event.created_at <= bounds.end_date:
-                    matching_index = index
-            end_index = min(end_index, matching_index)
+        if bounds.start_date or bounds.end_date:
+            start_date = _as_utc(bounds.start_date) if bounds.start_date else None
+            end_date = _as_utc(bounds.end_date) if bounds.end_date else None
+            matching_indices = []
+            for index in range(start_index, end_index + 1):
+                created_at = _as_utc(anchored_events[index].created_at)
+                if (start_date is None or created_at >= start_date) and (end_date is None or created_at <= end_date):
+                    matching_indices.append(index)
+            # Verify the complete chain segment between the first and last match.
+            start_index = matching_indices[0] if matching_indices else len(anchored_events)
+            end_index = matching_indices[-1] if matching_indices else -1
             boundary_limited = True
 
         if start_index > end_index or start_index >= len(anchored_events) or end_index < 0:

@@ -51,8 +51,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         duration_ms = round((perf_counter() - started_at) * 1000, 2)
         duration_seconds = max(0.0, duration_ms / 1000.0)
         response.headers["X-Request-ID"] = request_id
-        route = request.scope.get("route")
-        route_path = getattr(route, "path", None) or request.url.path or "unmatched"
+        # Newer FastAPI versions keep include_router prefixes on the effective
+        # route and expose the original leaf route separately.
+        effective_route = (request.scope.get("fastapi") or {}).get("effective_route_context")
+        route_path = (
+            getattr(effective_route, "path_format", None)
+            or getattr(request.scope.get("route"), "path", None)
+            or request.url.path
+            or "unmatched"
+        )
         error_code = str(getattr(request.state, "error_code", "") or "")
         metrics = get_metrics_registry()
         metrics.increment(

@@ -2,8 +2,9 @@ PYTHON ?= python
 NPM ?= npm
 TRIVY ?= trivy
 K6 ?= k6
+TERRAFORM ?= terraform
 
-.PHONY: bootstrap verify api-install api-migrate api-dev api-test api-seed web-install web-dev up down lint security-scan audit-deps verify-all repo-secrets-check load-smoke load-gateway load-all e2e-install e2e e2e-headed prod-config-check worker validate-deployment validate-local verify-restore observability-files observability-check release-check pilot-rehearsal pilot-rehearsal-local
+.PHONY: bootstrap verify api-install api-migrate api-dev api-test api-seed web-install web-dev up down lint security-scan audit-deps verify-all repo-secrets-check load-smoke load-gateway load-all e2e-install e2e e2e-headed prod-config-check worker validate-deployment validate-local verify-restore observability-files observability-check release-check pilot-rehearsal pilot-rehearsal-local aws-ecs-fmt aws-ecs-validate aws-ecs-plan local-demo-reset local-demo-check local-demo-start-commands
 
 bootstrap:
 	cd apps/api && $(PYTHON) -m pip install -e .[dev]
@@ -97,6 +98,43 @@ pilot-rehearsal:
 
 pilot-rehearsal-local:
 	$(PYTHON) scripts/run-pilot-rehearsal.py --local
+
+local-demo-reset:
+	$(PYTHON) scripts/local-demo.py reset
+
+local-demo-check:
+	$(PYTHON) scripts/local-demo.py check
+
+local-demo-start-commands:
+	$(PYTHON) scripts/local-demo.py start-commands
+
+aws-ecs-fmt:
+	@if command -v $(TERRAFORM) >/dev/null 2>&1; then \
+		$(TERRAFORM) -chdir=deploy/aws/ecs fmt -recursive; \
+	else \
+		echo "terraform not installed locally; run 'terraform -chdir=deploy/aws/ecs fmt -recursive' after installing Terraform"; \
+	fi
+
+aws-ecs-validate:
+	@if command -v $(TERRAFORM) >/dev/null 2>&1; then \
+		$(TERRAFORM) -chdir=deploy/aws/ecs fmt -check && \
+		$(TERRAFORM) -chdir=deploy/aws/ecs init -backend=false >/dev/null && \
+		$(TERRAFORM) -chdir=deploy/aws/ecs validate; \
+	else \
+		echo "terraform not installed locally; run 'terraform -chdir=deploy/aws/ecs fmt -check && terraform -chdir=deploy/aws/ecs init -backend=false && terraform -chdir=deploy/aws/ecs validate' after installing Terraform, or use the GitHub Actions Terraform ECS Validation workflow"; \
+	fi
+
+aws-ecs-plan:
+	@if command -v $(TERRAFORM) >/dev/null 2>&1; then \
+		if [ -z "$$AWS_ECS_TFVARS" ]; then \
+			echo "Set AWS_ECS_TFVARS=/path/to/terraform.tfvars before running plan"; \
+			exit 1; \
+		fi; \
+		$(TERRAFORM) -chdir=deploy/aws/ecs init -backend=false >/dev/null && \
+		$(TERRAFORM) -chdir=deploy/aws/ecs plan -var-file=$$AWS_ECS_TFVARS; \
+	else \
+		echo "terraform not installed locally; run 'terraform -chdir=deploy/aws/ecs plan -var-file=/path/to/terraform.tfvars' after installing Terraform"; \
+	fi
 
 observability-files:
 	@echo observability/prometheus/prometheus.yml

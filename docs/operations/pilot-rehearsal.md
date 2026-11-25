@@ -13,9 +13,18 @@ It reuses existing safe checks where possible:
 - `python scripts/check-no-live-secrets.py`
 - `python scripts/validate-policy-pack.py --pack policy-packs/pilot-default/policies.json`
 - `python scripts/validate-deployment.py` when live deployment inputs are provided
+- `python scripts/check-recovery-readiness.py` when you are preparing a restore drill or upgrade window
 - required-doc and artifact presence checks for pilot docs, API evaluation files, policy-pack files, and observability starter assets
 
 It does not call external connectors, create audit checkpoints, run retention purge, or mutate connector credentials.
+
+When live deployment validation runs, the rehearsal wrapper also preserves the validator's redacted evidence summary so operators can capture one safe snapshot of:
+
+- health and readiness posture
+- worker availability
+- GitHub connector readiness and probe status
+- audit-integrity checkpoint posture
+- metrics-path warnings or internal-only notes
 
 ## When To Run It
 
@@ -92,6 +101,7 @@ The rehearsal runner is useful for confirming:
 - public docs and examples do not contain obvious live-secret patterns
 - the default pilot policy pack still validates cleanly
 - a running AgentGate environment can pass the existing safe deployment smoke validator when credentials are provided
+- a running AgentGate environment can emit a redacted evidence summary for operator review and rehearsal records
 
 ## What It Does Not Prove
 
@@ -103,6 +113,15 @@ The rehearsal runner does not prove:
 - audit-checkpoint survivability in external storage
 - HA, Kubernetes, Helm, Terraform, or managed-operations maturity
 - compliance, immutability, or enterprise-GA readiness
+
+Use `scripts/check-recovery-readiness.py` separately when you want non-destructive PASS or WARN or FAIL output for:
+
+- backup confirmation
+- restore-target readiness
+- rollback decision points
+- Redis recovery expectations
+- audit-checkpoint recovery review
+- redacted recovery evidence capture
 
 ## Required Manual Follow-Ups
 
@@ -125,6 +144,7 @@ Treat those as the evidence package that moves the team from repo-package ready 
 ## Related Docs
 
 - [Deployment Validation](deployment-validation.md)
+- [Self-Hosted Evaluation](self-hosted-evaluation.md)
 - [Backup And Restore](backup-and-restore.md)
 - [Pilot Policy Pack](pilot-policy-pack.md)
 - [API Evaluation](api-evaluation.md)

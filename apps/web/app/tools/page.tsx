@@ -17,6 +17,7 @@ import { apiBaseUrl } from "@/lib/config";
 import { formatDate } from "@/lib/utils";
 import type {
   RiskBand,
+  ToolCredentialReference,
   ToolSafeDetail,
   ToolSafeMetadataCreateInput,
   ToolSafeMetadataUpdateInput,
@@ -139,6 +140,27 @@ function renderAuthModeLabel(value: string | null | undefined): string {
   return renderLabel(value || "not_applicable");
 }
 
+function renderConnectorModeLabel(value: ToolSafeSummary["connector_mode"] | null | undefined): string {
+  switch (value) {
+    case "demo_safe_mock":
+      return "demo-safe mock";
+    case "live_connector":
+      return "live connector";
+    default:
+      return "not applicable";
+  }
+}
+
+function renderConnectorModeTone(value: ToolSafeSummary["connector_mode"] | null | undefined): string {
+  if (value === "demo_safe_mock") {
+    return "warning";
+  }
+  if (value === "live_connector") {
+    return "low";
+  }
+  return "low";
+}
+
 function formatAllowlistCounts(counts: Record<string, number>): string {
   const entries = Object.entries(counts).filter(([, value]) => value > 0);
   if (!entries.length) {
@@ -155,6 +177,42 @@ function formatActions(actions: string[]): string {
     return "No documented action set";
   }
   return actions.join(", ");
+}
+
+function renderCredentialReferenceSummary(reference: ToolCredentialReference): string {
+  if (reference.reference_name) {
+    return reference.reference_name;
+  }
+  if (reference.reference_type === "secret_ref") {
+    return "Configured through an external secret reference";
+  }
+  if (reference.reference_type === "vault") {
+    return "Configured through an external vault reference";
+  }
+  return "Configured outside AgentGate";
+}
+
+function renderCredentialReferenceState(reference: ToolCredentialReference): {
+  tone: string;
+  label: string;
+} {
+  if (reference.configured === true) {
+    return { tone: "ready", label: "available" };
+  }
+  if (reference.configured === false) {
+    return { tone: "warning", label: "missing" };
+  }
+  return { tone: "low", label: "external" };
+}
+
+function renderProbeSourceLabel(value: "manual_probe" | "health_check_job" | null | undefined): string {
+  if (value === "health_check_job") {
+    return "scheduled or job-driven";
+  }
+  if (value === "manual_probe") {
+    return "manual";
+  }
+  return "unknown";
 }
 
 function parseDelimitedList(value: string): string[] {
@@ -360,6 +418,9 @@ function toToolSafeSummary(detail: ToolSafeDetail): ToolSafeSummary {
     health_can_connect: detail.health_can_connect,
     health_probe_performed: detail.health_probe_performed,
     health_checked_at: detail.health_checked_at,
+    connector_mode: detail.connector_mode,
+    live_execution_ready: detail.live_execution_ready,
+    status_summary: detail.status_summary,
     warning_flags: detail.warning_flags,
     created_at: detail.created_at,
     updated_at: detail.updated_at,
@@ -410,8 +471,8 @@ function buildCreatePayload(draft: ToolMetadataDraft): ToolSafeMetadataCreateInp
 }
 
 function buildUpdatePayload(draft: ToolMetadataDraft): ToolSafeMetadataUpdateInput {
-  const createPayload = buildCreatePayload(draft);
-  const { type: _type, ...updates } = createPayload;
+  const updates: Partial<ToolSafeMetadataCreateInput> = buildCreatePayload(draft);
+  delete updates.type;
   return updates;
 }
 
@@ -811,11 +872,14 @@ export default function ToolsPage() {
   const degradedCount = (data || []).filter((item) => item.health_status !== "ready").length;
   const externalCount = (data || []).filter((item) => item.trust_domain && item.trust_domain !== "internal").length;
   const selectedTemplate = templateDefinitions.find((item) => item.id === selectedTemplateId) || templateDefinitions[0];
+  const selectedToolCredentialReferences = selectedTool?.credential_references || [];
+  const selectedToolValidationMessages = selectedTool?.validation_messages || [];
+  const selectedToolSupportedAuthModes = selectedTool?.supported_auth_modes || [];
 
   return (
     <PageShell
       title="Tools & Connectors"
-      description="Review connector posture, create or edit non-secret metadata, and run safe health probes without exposing raw config, secret refs, env-var names, or credentials."
+      description="Review connector posture, create or edit non-secret metadata, and validate GitHub-first pilot readiness without exposing token values, private keys, or raw Authorization headers."
       actions={
         <Button variant="ghost" onClick={() => setRefreshKey((current) => current + 1)} disabled={!token}>
           Refresh
@@ -845,8 +909,8 @@ export default function ToolsPage() {
           <h3 className="mt-3 text-xl font-semibold text-slate-950">Configure secrets outside AgentGate</h3>
           <div className="mt-3 space-y-3 text-sm text-slate-500">
             <p>This browser path accepts only connector metadata such as names, auth-mode labels, base URLs, and allowlists.</p>
-            <p>It does not accept tokens, private keys, auth emails, secret refs, env-var names, or raw Authorization headers.</p>
-            <p>Credential injection stays in deployment config, environment wiring, or future secret-manager integrations.</p>
+            <p>It does not accept token values, private keys, auth emails, raw secret material, or Authorization headers.</p>
+            <p>Review panels can show safe credential reference names such as env-var identifiers, but credential injection still stays in deployment config, environment wiring, or future secret-manager integrations.</p>
           </div>
           <div className="mt-5 flex flex-wrap gap-3">
             <Link
@@ -971,7 +1035,7 @@ export default function ToolsPage() {
             <div className="mt-6">
               <EmptyState
                 title="Pick a connector from the inventory table"
-                description="The review panel shows safe detail such as allowlists, auth-mode labels, trust hints, and health posture without exposing raw config or credential bindings."
+                description="The review panel shows safe detail such as allowlists, auth-mode labels, trust hints, and GitHub readiness guidance without exposing token values or raw secret material."
               />
             </div>
           ) : detailLoading ? (
@@ -985,9 +1049,20 @@ export default function ToolsPage() {
                     <Badge tone={selectedTool.health_status === "ready" ? "ready" : selectedTool.health_status}>
                       {renderLabel(selectedTool.health_status)}
                     </Badge>
+                    <Badge tone={renderConnectorModeTone(selectedTool.connector_mode)}>
+                      {renderConnectorModeLabel(selectedTool.connector_mode)}
+                    </Badge>
                     <Badge tone="low">{renderAuthModeLabel(selectedTool.auth_mode)}</Badge>
                     {selectedTool.trust_domain ? <Badge tone={selectedTool.trust_domain === "internal" ? "ready" : "warning"}>{renderLabel(selectedTool.trust_domain)}</Badge> : null}
+                    {selectedTool.type === "github" ? (
+                      <Badge tone={selectedTool.live_execution_ready ? "ready" : "warning"}>
+                        {selectedTool.live_execution_ready ? "live ready" : "live setup needed"}
+                      </Badge>
+                    ) : null}
                   </div>
+                  {selectedTool.status_summary ? (
+                    <p className="mt-3 text-sm text-slate-600">{selectedTool.status_summary}</p>
+                  ) : null}
                 </div>
                 <div className="text-sm text-slate-500">
                   <p>Docs: <code>{selectedTool.documentation_path || connectorGuides[selectedTool.type]?.path || "docs/operations/tool-management.md"}</code></p>
@@ -996,16 +1071,113 @@ export default function ToolsPage() {
                 </div>
               </div>
 
+              {selectedTool.type === "github" ? (
+                <div className="grid gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">GitHub pilot readiness</p>
+                    <h4 className="mt-2 text-lg font-semibold text-slate-950">Safe live-connector setup guidance</h4>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Review whether this connector is still demo-safe only or whether live GitHub execution is ready after external credential wiring.
+                    </p>
+                  </div>
+
+                  {selectedToolCredentialReferences.length ? (
+                    <div className="grid gap-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Expected external credential wiring</p>
+                      {selectedToolCredentialReferences.map((reference) => {
+                        const state = renderCredentialReferenceState(reference);
+                        return (
+                          <div
+                            key={`${selectedTool.id}-${reference.key}-${reference.reference_name || reference.reference_type || "external"}`}
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <p className="text-sm font-semibold text-slate-900">{reference.label}</p>
+                              <Badge tone={state.tone}>{state.label}</Badge>
+                            </div>
+                            <p className="mt-2 text-xs text-slate-500">
+                              {reference.reference_name ? (
+                                <>
+                                  Reference name: <code>{renderCredentialReferenceSummary(reference)}</code>
+                                </>
+                              ) : (
+                                renderCredentialReferenceSummary(reference)
+                              )}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  {selectedToolValidationMessages.length ? (
+                    <div className="grid gap-2">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Validation guidance</p>
+                      {selectedToolValidationMessages.map((message) => (
+                        <p key={`${selectedTool.id}-${message}`} className="text-sm text-slate-600">
+                          {message}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Latest safe probe evidence</p>
+                      <h5 className="mt-2 text-sm font-semibold text-slate-950">
+                        {selectedTool.last_probe ? "Most recent connector probe" : "No connector probe history yet"}
+                      </h5>
+                    </div>
+                    {selectedTool.last_probe ? (
+                      <>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge tone={selectedTool.last_probe.status === "ready" ? "ready" : selectedTool.last_probe.status}>
+                            {renderLabel(selectedTool.last_probe.status)}
+                          </Badge>
+                          <Badge tone={selectedTool.last_probe.probe_performed ? "low" : "warning"}>
+                            {selectedTool.last_probe.probe_performed ? "live call attempted" : "live call skipped"}
+                          </Badge>
+                          <Badge tone="low">{renderProbeSourceLabel(selectedTool.last_probe.source)}</Badge>
+                        </div>
+                        <div className="grid gap-1 text-sm text-slate-600">
+                          <p>Checked {formatDate(selectedTool.last_probe.checked_at)}</p>
+                          {selectedTool.last_probe.can_connect !== null ? (
+                            <p>{selectedTool.last_probe.can_connect ? "Upstream connectivity succeeded during the latest probe." : "Upstream connectivity failed during the latest probe."}</p>
+                          ) : (
+                            <p>The latest probe did not attempt a live connector call.</p>
+                          )}
+                          {selectedTool.last_successful_probe_at ? (
+                            <p>Last successful live probe: {formatDate(selectedTool.last_successful_probe_at)}</p>
+                          ) : null}
+                          {selectedTool.last_failed_probe_at ? (
+                            <p>Last degraded or failed probe: {formatDate(selectedTool.last_failed_probe_at)}</p>
+                          ) : null}
+                          {selectedTool.last_failed_probe_error_summary ? (
+                            <p className="text-amber-700">{selectedTool.last_failed_probe_error_summary}</p>
+                          ) : selectedTool.last_probe.error_summary ? (
+                            <p className="text-amber-700">{selectedTool.last_probe.error_summary}</p>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-sm text-slate-500">
+                        Run a health check or enable connector-health jobs to capture a safe timestamped readiness trail without exposing any credentials.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
               <MetadataEditor
                 draft={editDraft}
                 setDraft={setManagedEditDraft}
-                authModes={selectedTool.supported_auth_modes.length ? selectedTool.supported_auth_modes : authModesByType[editDraft.type]}
+                authModes={selectedToolSupportedAuthModes.length ? selectedToolSupportedAuthModes : authModesByType[editDraft.type]}
                 disabled={!canManage || busyActionKey !== null}
               />
 
               <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4 text-xs text-slate-500">
-                This editor updates metadata only. Existing secret bindings stay external and hidden. Connector health can
-                still be unconfigured or degraded until the deployment injects the required credentials.
+                This editor updates metadata only. Existing secret bindings stay external. AgentGate can show safe
+                credential reference names for operator guidance, but it still does not collect or reveal secret values.
               </div>
 
               <div className="flex flex-wrap gap-3">
@@ -1115,6 +1287,9 @@ export default function ToolsPage() {
                       <Td>
                         <div className="text-sm text-slate-900">{renderAuthModeLabel(tool.auth_mode)}</div>
                         <div className="mt-1 text-xs text-slate-500">
+                          Mode: {renderConnectorModeLabel(tool.connector_mode)}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
                           Trust: {renderLabel(tool.trust_domain || "not_applicable")}
                         </div>
                         <div className="mt-1 text-xs text-slate-500">
@@ -1129,6 +1304,7 @@ export default function ToolsPage() {
                       </Td>
                       <Td>
                         <div className="space-y-2">
+                          {tool.status_summary ? <p className="text-xs text-slate-500">{tool.status_summary}</p> : null}
                           <div className="text-xs text-slate-500">
                             {guide ? (
                               <>

@@ -40,6 +40,8 @@ Use this checklist before treating a self-hosted AgentGate deployment as product
 ## Deployment
 
 - `docker compose -f compose.prod.example.yml config` passes
+- `terraform -chdir=deploy/aws/ecs validate` passes if you are using the ECS/Fargate starter
+- `docs/operations/aws-ecs-rehearsal.md` has been followed for the target AWS environment if you are using the ECS/Fargate starter
 - database migrations run successfully before traffic cutover
 - `api`, `web`, and `worker` start successfully
 - `scheduler` starts successfully when recurring tasks are enabled
@@ -65,7 +67,7 @@ Use this checklist before treating a self-hosted AgentGate deployment as product
 ## Security
 
 - demo credentials are not seeded into production
-- first-user creation uses `POST /v1/auth/bootstrap` on a clean environment only
+- first-user creation uses `POST /v1/auth/bootstrap` on a clean environment with a temporary `AGENTGATE_BOOTSTRAP_TOKEN` supplied via `X-AgentGate-Bootstrap-Token`
 - `/metrics` is not exposed publicly
 - reverse proxy and network ACLs limit public exposure appropriately
 - GitHub, Jira, MCP, Slack, OIDC, and payload-key secrets are not stored in database config
@@ -85,7 +87,7 @@ Use this checklist before treating a self-hosted AgentGate deployment as product
 
 ## Honest Remaining Gaps
 
-- no Kubernetes/Helm/Terraform deployment profile in-repo
+- no Kubernetes/Helm deployment profile in-repo, and the ECS/Fargate Terraform starter still assumes existing cloud primitives rather than provisioning a full AWS platform
 - the built-in recurring scheduler is intentionally simple and not leader-elected
 - the current identity lifecycle foundation is deactivation-first, with a minimal SCIM `/Users` surface rather than full SCIM identity governance
 - the shipped observability assets are only starter files and do not replace a full monitoring stack, dashboard program, or alert-routing setup

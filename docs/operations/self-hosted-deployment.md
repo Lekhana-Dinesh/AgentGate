@@ -1,6 +1,6 @@
 # Self-Hosted Deployment
 
-AgentGate now includes a self-hosted deployment foundation through `compose.prod.example.yml`.
+AgentGate now includes self-hosted deployment foundations through `compose.prod.example.yml` and an AWS ECS/Fargate Terraform starter in `deploy/aws/ecs/`.
 
 This is a practical baseline for teams running AgentGate themselves with:
 
@@ -13,6 +13,8 @@ This is a practical baseline for teams running AgentGate themselves with:
 
 Use this as the production-style baseline for controlled pilots and high-touch self-hosted evaluations.
 This is not a claim of enterprise GA, managed hosting, certified compliance, or complete platform operations.
+
+If you want the fastest practical first-company rehearsal path, start with [Self-Hosted Evaluation](self-hosted-evaluation.md). That guide narrows this broader deployment baseline to a single-VM Docker Compose controlled-pilot proof with external PostgreSQL, external Redis, and one real approval-gated GitHub action.
 
 ## Recommended Topology
 
@@ -29,8 +31,12 @@ The provided `compose.prod.example.yml` intentionally does not start PostgreSQL 
 ## Files
 
 - `compose.prod.example.yml`
+- `.env.self-hosted-evaluation.example`
+- `deploy/aws/ecs/`
 - `scripts/validate-deployment.py`
+- `docs/operations/self-hosted-evaluation.md`
 - `docs/operations/backup-and-restore.md`
+- `docs/operations/aws-ecs-deployment.md`
 - `observability/prometheus/prometheus.yml`
 - `observability/prometheus/alert-rules.yml`
 - `observability/grafana/agentgate-overview-dashboard.json`
@@ -79,6 +85,7 @@ Common optional integration examples:
 For first live pilot workflows, prefer GitHub. Treat Jira as an explicit opt-in second phase, and keep MCP disabled unless the remote server is internal and tightly allowlisted.
 
 The `compose.prod.example.yml` file uses placeholder defaults so `docker compose ... config` can be validated safely, but real deployments must override them.
+For an AWS-specific starter that keeps the same runtime model, see `docs/operations/aws-ecs-deployment.md`.
 
 ## PostgreSQL Setup
 
@@ -219,7 +226,8 @@ Do not use seeded demo credentials in production.
 The supported first-user workflow is:
 
 - deploy a clean environment with no users
-- call `POST /v1/auth/bootstrap` once to create the first tenant owner
+- temporarily configure a distinct strong `AGENTGATE_BOOTSTRAP_TOKEN` and pass it via `X-AgentGate-Bootstrap-Token` on `POST /v1/auth/bootstrap` to create the first owner, then remove the token and restart
+- inject the token into the API service only. With Compose, use a local override for the API environment
 
 After the first user exists, bootstrap is locked by design.
 
@@ -298,10 +306,11 @@ At a minimum:
 
 ## Known Limitations
 
-- this is a Compose-based self-hosted foundation, not Kubernetes, Helm, or Terraform
+- this repo now offers a Compose baseline plus a separate AWS ECS/Fargate Terraform starter, not a single universal platform module
+- the ECS/Fargate starter still assumes existing VPC, registry, RDS, Redis, KMS, DNS, and secret-management primitives rather than provisioning a complete platform
 - no built-in HA topology, autoscaling, or managed failover
 - the built-in recurring scheduler is intentionally simple and not a full distributed orchestration platform
 - no lease renewal for genuinely long-running worker jobs yet
-- no cloud-specific deployment modules for AWS, GCP, or Azure beyond AWS KMS integration
+- no broader cloud deployment modules for GCP or Azure
 - external audit checkpoint anchoring now exists, but immutable evidence claims still depend on destination-side WORM or Object Lock controls
 - no managed certificate automation or ingress stack in-repo

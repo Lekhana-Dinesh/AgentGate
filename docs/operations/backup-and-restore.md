@@ -97,6 +97,42 @@ Notes:
 - verify backup retention, replication, and access control in the backup system itself
 - if you use object-storage audit checkpoints, protect that bucket or prefix with its own retention and access policy
 
+## Recovery Readiness Preflight
+
+Before a restore drill, upgrade window, or recovery rehearsal, run the non-destructive recovery readiness checker.
+
+Template or package review:
+
+```bash
+python scripts/check-recovery-readiness.py \
+  --env-file .env.self-hosted-evaluation.example \
+  --allow-placeholders \
+  --evidence-label template-review
+```
+
+Real pilot or production-style env review:
+
+```bash
+python scripts/check-recovery-readiness.py \
+  --env-file /etc/agentgate/pilot.env \
+  --backup-confirmed \
+  --restore-target-confirmed \
+  --previous-release-ref agentgate-2026-05-22 \
+  --migration-compatibility unknown \
+  --redis-recovery-reviewed \
+  --audit-anchor-reviewed \
+  --kms-recovery-reviewed \
+  --evidence-label restore-drill-preflight
+```
+
+Expected behavior:
+
+- `PASS`: config shape and operator confirmations are strong enough for the next rehearsal step
+- `WARN`: config is usable for review, but backup, restore, rollback, or checkpoint evidence is still incomplete
+- `FAIL`: unsafe or incomplete config, such as SQLite, demo credentials, missing Redis, or missing recovery key posture
+
+The script does not restore PostgreSQL, rotate secrets, or mutate AgentGate state. It only prints a redacted evidence summary and the operator decision points that still need review.
+
 ## Restore Procedure
 
 Use a clean PostgreSQL target. Do not restore into an unknown mixed-state database.
@@ -143,6 +179,19 @@ Recovery notes:
 - if Redis is reused after restoring an older PostgreSQL snapshot, clear or replace stale broker state according to your environment's Redis recovery policy
 - do not seed demo data into a restored production environment
 
+## Rollback Decision Points
+
+Use these choices deliberately before the maintenance window starts:
+
+- application-only rollback:
+  - only valid when the target migration set is backward compatible
+  - requires the previous image tag or build revision to still be retained
+- database-involved rollback:
+  - required when the migration is not backward compatible or compatibility is unknown
+  - stop write traffic, restore PostgreSQL, then redeploy the previous application release
+
+Do not treat rollback as a single generic step. Record which path you expect to use, and include that decision in the recovery evidence package.
+
 ## Post-Restore Verification
 
 Run the existing deployment validator first:
@@ -185,6 +234,23 @@ A useful drill is:
 7. update the runbook before the next drill
 
 The pilot rehearsal runner is useful before or after this drill for repo and environment sanity checks, but it does not replace the restore procedure itself.
+
+## Recovery Evidence To Capture
+
+Capture a redacted evidence bundle for every drill:
+
+- recovery readiness checker output
+- PostgreSQL backup identifier or snapshot reference
+- intended previous release or image reference
+- migration compatibility decision
+- deployment validator output after restore
+- `GET /health`
+- `GET /ready`
+- `GET /v1/workers/status`
+- `GET /v1/audit-integrity/status`
+- `GET /v1/audit-integrity/checkpoints`
+- latest checkpoint verify result if external anchoring is enabled
+- actual RTO and any missing manual steps
 
 ## What This Guide Does Not Cover
 

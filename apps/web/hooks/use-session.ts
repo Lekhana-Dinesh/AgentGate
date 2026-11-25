@@ -19,7 +19,9 @@ import type { CurrentUser, LoginPayload, TokenResponse } from "@/types/api";
 
 async function resolveCookieSession(): Promise<CurrentUser | null> {
   try {
-    const currentUser = await apiClient.getCurrentUser(COOKIE_SESSION_TOKEN);
+    const currentUser = await apiClient.getCurrentUser(COOKIE_SESSION_TOKEN, {
+      skipAuthRedirect: true,
+    });
     const csrfResponse = await apiClient.getCsrfToken();
     activateCookieSession(csrfResponse.csrf_token);
     return currentUser;
@@ -50,7 +52,9 @@ export function useSession() {
           return;
         }
         try {
-          const currentUser = await apiClient.getCurrentUser(storedToken);
+          const currentUser = await apiClient.getCurrentUser(storedToken, {
+            skipAuthRedirect: true,
+          });
           if (!cancelled) {
             setStoredUser(currentUser);
             setTokenState(storedToken);

@@ -182,15 +182,37 @@ export interface ToolSafeSummary {
   health_can_connect: boolean | null;
   health_probe_performed: boolean;
   health_checked_at: string | null;
+  connector_mode: "demo_safe_mock" | "live_connector" | "not_applicable";
+  live_execution_ready: boolean;
+  status_summary: string | null;
   warning_flags: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ToolCredentialReference {
+  key: string;
+  label: string;
+  reference_name: string | null;
+  reference_type: "env" | "secret_ref" | "vault" | null;
+  configured: boolean | null;
+}
+
+export interface ToolProbeObservation {
+  status: "ready" | "degraded" | "unconfigured" | "unsupported";
+  checked_at: string;
+  probe_performed: boolean;
+  can_connect: boolean | null;
+  error_summary: string | null;
+  source: "manual_probe" | "health_check_job" | null;
 }
 
 export interface ToolSafeDetail extends ToolSafeSummary {
   base_url: string | null;
   documentation_path: string | null;
   supported_auth_modes: string[];
+  credential_references: ToolCredentialReference[];
+  validation_messages: string[];
   repository_allowlist: string[];
   internal_repositories: string[];
   internal_owners: string[];
@@ -205,6 +227,10 @@ export interface ToolSafeDetail extends ToolSafeSummary {
   transport: string | null;
   allowed_tool_names: string[];
   blocked_tool_names: string[];
+  last_probe: ToolProbeObservation | null;
+  last_successful_probe_at: string | null;
+  last_failed_probe_at: string | null;
+  last_failed_probe_error_summary: string | null;
 }
 
 export interface ToolSafeMetadataCreateInput {
@@ -719,6 +745,79 @@ export interface Policy {
   updated_at: string;
 }
 
+export interface PolicySimulationRequest {
+  agent_id: string;
+  original_intent: string;
+  tool_name: string;
+  tool_type?: ToolType | null;
+  action_name: string;
+  target_hint?: string | null;
+  resource_hint?: string | null;
+  arguments: Record<string, unknown>;
+  data_classifications: string[];
+  metadata?: Record<string, unknown>;
+  policy_ids?: string[];
+  proposed_policies?: Array<{
+    name: string;
+    description: string;
+    enabled: boolean;
+    severity: PolicySeverity;
+    decision: PolicyDecision;
+    conditions: PolicyConditionSet;
+  }>;
+  dry_run: true;
+}
+
+export interface PolicySimulationMatch {
+  policy_id: string | null;
+  name: string;
+  severity: PolicySeverity;
+  decision: PolicyDecision;
+  source: "saved" | "proposed";
+}
+
+export interface PolicySimulationResult {
+  dry_run: true;
+  advisory: true;
+  decision: PolicyDecision;
+  approval_required: boolean;
+  risk_band: RiskBand;
+  intent: {
+    intent_match: boolean;
+    confidence: number;
+    explanation: string;
+    detected_mismatch_reasons: string[];
+  };
+  risk: {
+    score: number;
+    band: RiskBand;
+    reasons: string[];
+    summary: string;
+    factors: Array<{
+      key: string;
+      label: string;
+      category:
+        | "baseline"
+        | "action"
+        | "environment"
+        | "recipient"
+        | "data"
+        | "amount"
+        | "policy"
+        | "intent";
+      weight: number;
+      explanation: string;
+    }>;
+  };
+  matched_policies: PolicySimulationMatch[];
+  major_decision_factors: string[];
+  policy_reasons: string[];
+  explanation: string;
+  no_external_action_executed: true;
+  no_job_enqueued: true;
+  no_approval_created: true;
+}
+
 export interface AuditEvent {
   id: string;
   tenant_id: string;
@@ -862,4 +961,31 @@ export interface DemoScenarioResponse {
     status: ApprovalStatus;
     action_name: string;
   }>;
+}
+
+export interface GitHubGovernedDemoResponse {
+  scenario: "github_governed_workflow";
+  trace_id: string;
+  trace_status: TraceStatus;
+  trace_summary: string;
+  simulation: PolicySimulationResult;
+  governed_attempt: GatewayDecision;
+  approval: {
+    approval_id: string;
+    status: ApprovalStatus;
+    reviewer_email: string;
+    approver_comment: string | null;
+    execute_now: boolean;
+    decided_at: string | null;
+  };
+  tool_call: ToolCall;
+  audit_events: AuditEvent[];
+  execution_mode: "demo_safe_mock" | "queued" | "live_connector" | "unsupported";
+  no_live_external_call: boolean;
+  evidence_links: {
+    trace_path: string;
+    approvals_path: string;
+    tool_calls_path: string;
+    audit_path: string;
+  };
 }

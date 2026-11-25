@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     bootstrap_owner_email: str = _DEFAULT_BOOTSTRAP_OWNER_EMAIL
     bootstrap_owner_password: str = _DEFAULT_BOOTSTRAP_OWNER_PASSWORD
     bootstrap_owner_name: str = "Demo Owner"
+    bootstrap_token: str | None = None
     allow_demo_credentials: bool = False
     slack_notifications_enabled: bool = False
     slack_bot_token_env_var: str = "AGENTGATE_SLACK_BOT_TOKEN"
@@ -421,6 +422,10 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_security_defaults(self) -> "Settings":
         production_like = is_production_like_environment(self.environment)
+        if self.bootstrap_token is not None and (
+            self._is_weak_secret(self.bootstrap_token) or self.bootstrap_token == self.secret_key
+        ):
+            raise ValueError("AGENTGATE_BOOTSTRAP_TOKEN must be a strong secret distinct from AGENTGATE_SECRET_KEY.")
         insecure_secret = self._is_weak_secret(self.secret_key)
         if production_like and insecure_secret:
             raise ValueError(

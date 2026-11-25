@@ -5,6 +5,7 @@ This runbook is the operator-facing procedure for deploying, validating, upgradi
 Use it together with:
 
 - `docs/operations/self-hosted-deployment.md`
+- `docs/operations/aws-ecs-deployment.md`
 - `docs/operations/backup-and-restore.md`
 - `docs/operations/deployment-hardening.md`
 - `docs/operations/production-readiness-checklist.md`
@@ -13,7 +14,7 @@ Use it together with:
 
 This runbook assumes:
 
-- `compose.prod.example.yml`
+- either `compose.prod.example.yml` or `deploy/aws/ecs/`
 - external PostgreSQL
 - external Redis
 - a dedicated `worker` process
@@ -29,8 +30,10 @@ Before the first deployment or any upgrade:
 3. Confirm Redis connectivity and access controls.
 4. Confirm required secrets and public URLs are injected.
 5. Confirm the KMS key exists and IAM permissions are in place if `AGENTGATE_KEY_PROVIDER=aws_kms`.
-6. Run `docker compose -f compose.prod.example.yml config`.
-7. Review `GET /ready` expectations and alerting destinations.
+6. If using Compose, run `docker compose -f compose.prod.example.yml config`.
+7. If using the ECS/Fargate starter, run `terraform -chdir=deploy/aws/ecs validate` and review the plan inputs.
+8. Review `GET /ready` expectations and alerting destinations.
+9. Run `python scripts/check-recovery-readiness.py --env-file /etc/agentgate/pilot.env ...` with the backup, rollback, Redis, and checkpoint-review confirmations you intend to rely on during the window.
 
 ## Initial Deployment
 
@@ -40,6 +43,8 @@ Before the first deployment or any upgrade:
 ```bash
 docker compose -f compose.prod.example.yml --profile ops run --rm migrate
 ```
+
+If you are using the ECS/Fargate starter instead of Compose, run the one-off `migrate` task described in `docs/operations/aws-ecs-deployment.md`, then update the long-running ECS services.
 
 3. Start the stack:
 
@@ -56,7 +61,7 @@ docker compose -f compose.prod.example.yml up -d api web worker scheduler
    - Prometheus can scrape `/metrics` from its internal path
    - starter alert rules are loaded if you are using Prometheus alerting
 6. Create the first owner only if the environment has no users yet:
-   - call `POST /v1/auth/bootstrap`
+   - temporarily configure a distinct strong `AGENTGATE_BOOTSTRAP_TOKEN`, supply it via `X-AgentGate-Bootstrap-Token` on `POST /v1/auth/bootstrap`, then remove the token from the API configuration and restart
 7. Disable any temporary bootstrap access workflows after the first owner is created.
 
 ## Routine Validation
@@ -83,6 +88,8 @@ After deployment, confirm:
 ```bash
 docker compose -f compose.prod.example.yml --profile ops run --rm migrate
 ```
+
+If you are using the ECS/Fargate starter, run the migration task against the new task definition before rolling the long-running services.
 
 5. Roll the `api`, `worker`, and `scheduler` services to the new version.
 6. Roll the `web` service to the new version, especially if `NEXT_PUBLIC_API_BASE_URL` or browser behavior changed.
@@ -113,6 +120,15 @@ Database-involved rollback:
 4. Revalidate login, readiness, worker processing, and audit-integrity status.
 
 Do not assume every migration is reversible. Review each migration deliberately before deployment.
+
+Recommended evidence before the window opens:
+
+- previous release or image reference retained
+- migration compatibility reviewed and recorded
+- fresh PostgreSQL backup confirmed
+- isolated restore target identified
+- Redis recovery expectations reviewed
+- audit-integrity checkpoint recovery reviewed if external anchoring is enabled
 
 ## Worker Operations
 
@@ -163,6 +179,20 @@ Restore drill guidance:
 
 See `docs/operations/backup-and-restore.md` for command examples and the full post-restore checklist.
 
+The recovery readiness checker is intentionally non-destructive and helps collect this evidence ahead of the drill:
+
+```bash
+python scripts/check-recovery-readiness.py \
+  --env-file /etc/agentgate/pilot.env \
+  --backup-confirmed \
+  --restore-target-confirmed \
+  --previous-release-ref agentgate-2026-05-22 \
+  --migration-compatibility unknown \
+  --redis-recovery-reviewed \
+  --audit-anchor-reviewed \
+  --kms-recovery-reviewed
+```
+
 ## Metrics And Logs
 
 Scrape:
@@ -207,4 +237,4 @@ If a deployment incident might involve security impact, also follow:
 - the built-in recurring scheduler is intentionally simple and not a full distributed orchestration platform
 - no in-repo HA/failover automation
 - external audit checkpoint anchoring now exists, but it is not a valid immutability claim unless the destination itself enforces WORM or Object Lock semantics
-- no Kubernetes, Helm, or Terraform deployment profile yet
+- no Kubernetes, Helm, or broader HA cloud orchestration profile yet; the ECS/Fargate Terraform starter is still a deployment foundation rather than a full platform module

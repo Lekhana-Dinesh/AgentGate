@@ -95,6 +95,7 @@ def seed() -> None:
                 {
                     "auth_mode": "env_pat",
                     "token_env_var": "AGENTGATE_GITHUB_TOKEN",
+                    "demo_safe_mock": True,
                     "internal_repositories": ["agentgate-labs/internal-agentgate"],
                     "internal_owners": ["agentgate-labs"],
                     "public_repositories": ["octocat/hello-world"],
@@ -381,8 +382,8 @@ def seed() -> None:
         db.commit()
         print("Seed complete.")
         print("Tenant slug: demo-agentgate")
-        print("Admin login: admin@demo.agentgate.example.com / AgentGate123!")
-        print("Reviewer login: reviewer@demo.agentgate.example.com / AgentGate123!")
+        print("Admin login: admin@demo.agentgate.example.com")
+        print("Reviewer login: reviewer@demo.agentgate.example.com")
     finally:
         db.close()
 

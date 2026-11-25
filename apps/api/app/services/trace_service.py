@@ -53,7 +53,7 @@ class TraceService:
                 select(ExecutionTrace).where(
                     ExecutionTrace.id == trace_id,
                     ExecutionTrace.tenant_id == tenant_id,
-                )
+                ).with_for_update().execution_options(populate_existing=True)
             )
             if not trace:
                 raise AppError("Trace not found in tenant.", status_code=404, code="trace_not_found")
@@ -106,6 +106,8 @@ class TraceService:
         content: str,
         metadata: dict | None = None,
     ) -> TraceStep:
+        # Hold the parent row through commit before allocating the next step number.
+        db.scalar(select(ExecutionTrace.id).where(ExecutionTrace.id == trace_id).with_for_update())
         next_step = (db.scalar(select(func.max(TraceStep.step_number)).where(TraceStep.trace_id == trace_id)) or 0) + 1
         step = TraceStep(
             trace_id=trace_id,
@@ -136,13 +138,16 @@ class TraceService:
             trace.completed_at = utcnow()
         db.flush()
 
-    def get_trace(self, db: Session, *, trace_id: str, tenant_id: str) -> ExecutionTrace:
-        trace = db.scalar(
-            select(ExecutionTrace).where(
-                ExecutionTrace.id == trace_id,
-                ExecutionTrace.tenant_id == tenant_id,
-            )
+    def get_trace(
+        self, db: Session, *, trace_id: str, tenant_id: str, for_update: bool = False,
+    ) -> ExecutionTrace:
+        query = select(ExecutionTrace).where(
+            ExecutionTrace.id == trace_id,
+            ExecutionTrace.tenant_id == tenant_id,
         )
+        if for_update:
+            query = query.with_for_update().execution_options(populate_existing=True)
+        trace = db.scalar(query)
         if not trace:
             raise AppError("Trace not found.", status_code=404, code="trace_not_found")
         return trace
