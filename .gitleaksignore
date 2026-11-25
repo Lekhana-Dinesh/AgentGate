@@ -1,0 +1,2 @@
+# Historical recovery-readiness test fixture. It does not decode to a valid Fernet key.
+63f6af55cd5b95b8745b50d5b0257071e827adb1:tests/test_production_hardening_scripts.py:generic-api-key:142
