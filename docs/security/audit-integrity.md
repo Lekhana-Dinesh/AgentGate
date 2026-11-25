@@ -99,6 +99,7 @@ Verification checks:
 - current event content against stored `event_hash`
 
 Verification can run across the full tenant history or against bounded anchored windows by event ID or date.
+Verification follows the stored sequence numbers. Concurrent writers can record timestamps out of sequence. Date bounds select the complete chain segment from the first to the last matching event so verification can check every link in that segment.
 
 Possible outcomes include:
 
@@ -116,7 +117,7 @@ Backfill is tenant-scoped and deterministic.
 
 In `dry_run` mode, AgentGate reports what would be rebuilt without changing stored data.
 
-In real mode, AgentGate walks the tenant's audit events in chronological order and writes chain metadata for each row.
+In real mode, backfill writes chain metadata for legacy history in chronological order. For a fully anchored history, it follows the existing sequence order.
 
 Important tradeoff:
 

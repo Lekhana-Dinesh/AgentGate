@@ -4,12 +4,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal
-from app.core.enums import AuditActorType, UserRole
+from app.core.enums import AuditActorType, ToolCallStatus, ToolType, TraceStatus, UserRole
 from app.core.errors import AppError
-from app.models import Agent, ApprovalRequest, AuditEvent, ToolCall, User
+from app.models import Agent, ApprovalRequest, AuditEvent, Tool, ToolCall, User
 from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.audit import AuditEventResponse
-from app.schemas.demo import DemoApprovalSummary, DemoEvidenceLinks, GitHubGovernedDemoResponse
+from app.schemas.demo import GITHUB_DEMO_SCENARIO, DemoApprovalSummary, DemoEvidenceLinks, GitHubGovernedDemoResponse
 from app.schemas.gateway import ToolCallRequest, serialize_tool_call
 from app.schemas.policy import PolicySimulationRequest
 from app.services.approval_service import ApprovalService
@@ -197,6 +197,13 @@ class DemoService:
         original_intent = (
             "A customer-visible GitHub issue needs a safe public acknowledgement after policy review."
         )
+        demo_tool = db.scalar(select(Tool).where(Tool.tenant_id == principal.tenant_id, Tool.name == "GitHub"))
+        if not demo_tool or demo_tool.type != ToolType.GITHUB or (demo_tool.config or {}).get("demo_safe_mock") is not True:
+            raise AppError(
+                "The GitHub demo requires the seeded demo-safe connector.",
+                status_code=409,
+                code="demo_safe_connector_required",
+            )
         arguments = {
             "repository": "octocat/hello-world",
             "repository_visibility": "public",
@@ -204,7 +211,7 @@ class DemoService:
             "body": "Thanks for the report. We validated the issue, queued the fix, and will post the rollout window once release checks finish.",
         }
         metadata = {
-            "scenario": "github_governed_workflow",
+            "scenario": GITHUB_DEMO_SCENARIO,
             "repository_visibility": "public",
             "trace_finalize": True,
         }
@@ -290,17 +297,18 @@ class DemoService:
         if not tool_call:
             raise AppError("GitHub demo tool call was not found.", status_code=500, code="demo_tool_call_missing")
 
+        db.refresh(tool_call)
         trace = self.trace_service.get_trace(db, trace_id=governed_attempt.trace_id, tenant_id=principal.tenant_id)
         self.audit_service.create_event(
             db,
             tenant_id=principal.tenant_id,
             actor_type=AuditActorType.USER,
             actor_id=principal.actor_id,
-            event_type="demo.scenario.completed",
+            event_type="demo.scenario.submitted" if trace.status == TraceStatus.RUNNING else "demo.scenario.completed",
             resource_type="execution_trace",
             resource_id=trace.id,
             metadata={
-                "scenario": "github_governed_workflow",
+                "scenario": GITHUB_DEMO_SCENARIO,
                 "final_status": trace.status.value,
                 "tool_call_id": tool_call.id,
                 "approval_id": approval.id,
@@ -313,8 +321,8 @@ class DemoService:
         execution_mode = (
             "demo_safe_mock"
             if tool_output.get("execution_mode") == "demo_safe_mock"
-            else "live_connector"
-            if tool_call.status.value == "executed"
+            else "queued"
+            if tool_call.status == ToolCallStatus.ALLOWED
             else "unsupported"
         )
 
@@ -351,7 +359,7 @@ class DemoService:
             tool_call=serialize_tool_call(tool_call),
             audit_events=[self._serialize_audit_event(item) for item in audit_events],
             execution_mode=execution_mode,
-            no_live_external_call=execution_mode == "demo_safe_mock",
+            no_live_external_call=True,
             evidence_links=DemoEvidenceLinks(
                 trace_path=f"/traces/{trace.id}",
                 approvals_path="/approvals?status=approved",

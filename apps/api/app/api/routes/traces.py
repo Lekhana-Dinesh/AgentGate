@@ -125,7 +125,7 @@ def append_trace_step(
     current_user=Depends(require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.DEVELOPER, UserRole.SECURITY_REVIEWER)),
     db: Session = Depends(get_db),
 ) -> TraceStepResponse:
-    trace = trace_service.get_trace(db, trace_id=trace_id, tenant_id=current_user.tenant_id)
+    trace = trace_service.get_trace(db, trace_id=trace_id, tenant_id=current_user.tenant_id, for_update=True)
     if trace.status in {TraceStatus.COMPLETED, TraceStatus.BLOCKED, TraceStatus.FAILED}:
         raise AppError(
             "Closed traces cannot accept new steps.",

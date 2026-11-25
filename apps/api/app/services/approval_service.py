@@ -36,7 +36,7 @@ class ApprovalService:
             select(ApprovalRequest).where(
                 ApprovalRequest.id == approval_id,
                 ApprovalRequest.tenant_id == tenant_id,
-            )
+            ).with_for_update().execution_options(populate_existing=True)
         )
         if not approval:
             raise AppError("Approval request not found.", status_code=404, code="approval_not_found")
@@ -53,6 +53,9 @@ class ApprovalService:
             raise AppError("Tool call not found.", status_code=404, code="tool_call_not_found")
 
         trace_id = tool_call.trace_id or tool_call.request_payload.get("trace_id")
+        if trace_id:
+            # Trace writers acquire this lock before creating tenant audit events.
+            self.trace_service.get_trace(db, trace_id=trace_id, tenant_id=tenant_id, for_update=True)
         approval.assigned_to_user_id = approver.id
         approval.approver_comment = payload.approver_comment
         approval.decided_at = utcnow()

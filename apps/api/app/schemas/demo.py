@@ -10,6 +10,8 @@ from app.schemas.audit import AuditEventResponse
 from app.schemas.gateway import GatewayDecisionResponse, ToolCallResponse
 from app.schemas.policy import PolicySimulationResponse
 
+GITHUB_DEMO_SCENARIO = "github_governed_workflow"
+
 
 class DemoEvidenceLinks(BaseModel):
     trace_path: str
@@ -37,6 +39,6 @@ class GitHubGovernedDemoResponse(BaseModel):
     approval: DemoApprovalSummary
     tool_call: ToolCallResponse
     audit_events: list[AuditEventResponse]
-    execution_mode: Literal["demo_safe_mock", "live_connector", "unsupported"]
+    execution_mode: Literal["demo_safe_mock", "queued", "live_connector", "unsupported"]
     no_live_external_call: bool
     evidence_links: DemoEvidenceLinks
