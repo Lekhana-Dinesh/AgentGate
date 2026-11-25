@@ -67,7 +67,7 @@ Use this checklist before treating a self-hosted AgentGate deployment as product
 ## Security
 
 - demo credentials are not seeded into production
-- first-user creation uses `POST /v1/auth/bootstrap` on a clean environment only
+- first-user creation uses `POST /v1/auth/bootstrap` on a clean environment with a temporary `AGENTGATE_BOOTSTRAP_TOKEN` supplied via `X-AgentGate-Bootstrap-Token`
 - `/metrics` is not exposed publicly
 - reverse proxy and network ACLs limit public exposure appropriately
 - GitHub, Jira, MCP, Slack, OIDC, and payload-key secrets are not stored in database config

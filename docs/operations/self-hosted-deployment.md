@@ -226,7 +226,8 @@ Do not use seeded demo credentials in production.
 The supported first-user workflow is:
 
 - deploy a clean environment with no users
-- call `POST /v1/auth/bootstrap` once to create the first tenant owner
+- temporarily configure a distinct strong `AGENTGATE_BOOTSTRAP_TOKEN` and pass it via `X-AgentGate-Bootstrap-Token` on `POST /v1/auth/bootstrap` to create the first owner, then remove the token and restart
+- inject the token into the API service only. With Compose, use a local override for the API environment
 
 After the first user exists, bootstrap is locked by design.
 

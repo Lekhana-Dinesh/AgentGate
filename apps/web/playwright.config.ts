@@ -7,7 +7,8 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // The browser scenarios share a seeded tenant and mutate its demo state.
+  workers: 1,
   outputDir: "test-results",
   reporter: [
     ["list"],

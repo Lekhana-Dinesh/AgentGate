@@ -61,7 +61,7 @@ docker compose -f compose.prod.example.yml up -d api web worker scheduler
    - Prometheus can scrape `/metrics` from its internal path
    - starter alert rules are loaded if you are using Prometheus alerting
 6. Create the first owner only if the environment has no users yet:
-   - call `POST /v1/auth/bootstrap`
+   - temporarily configure a distinct strong `AGENTGATE_BOOTSTRAP_TOKEN`, supply it via `X-AgentGate-Bootstrap-Token` on `POST /v1/auth/bootstrap`, then remove the token from the API configuration and restart
 7. Disable any temporary bootstrap access workflows after the first owner is created.
 
 ## Routine Validation

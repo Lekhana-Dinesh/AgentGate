@@ -60,7 +60,7 @@ type PolicySimulationForm = {
 const POLICY_PACK_DOC_PATH = "docs/operations/pilot-policy-pack.md";
 const POLICY_PACK_VALIDATE_COMMAND = "python scripts/validate-policy-pack.py --pack policy-packs/pilot-default/policies.json";
 const POLICY_PACK_DRY_RUN_COMMAND =
-  "AGENTGATE_API_URL=http://127.0.0.1:8000 AGENTGATE_EMAIL=admin@demo.agentgate.example.com AGENTGATE_PASSWORD=AgentGate123! AGENTGATE_TENANT_SLUG=demo-agentgate python scripts/apply-policy-pack.py --pack policy-packs/pilot-default/policies.json --dry-run";
+  "python scripts/apply-policy-pack.py --pack policy-packs/pilot-default/policies.json --dry-run";
 
 const POLICY_TEMPLATES: PolicyTemplate[] = [
   {
@@ -519,6 +519,9 @@ export default function PoliciesPage() {
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Dry-run the apply plan</p>
+              <p className="mt-2 text-sm text-slate-600">
+                Set the API URL and operator credentials in your shell before running this command from the repository root.
+              </p>
               <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-950 px-4 py-3 font-mono text-xs text-emerald-300">
                 {POLICY_PACK_DRY_RUN_COMMAND}
               </div>

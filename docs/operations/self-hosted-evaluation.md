@@ -129,10 +129,11 @@ python scripts/validate-deployment.py
 
 ## First Operator Account
 
-Use the clean-environment bootstrap flow only:
+For a clean environment, temporarily configure `AGENTGATE_BOOTSTRAP_TOKEN` as a strong random secret distinct from the JWT signing key. Supply that same secret from the operator shell:
 
 ```bash
 curl -X POST https://api.agentgate.example.com/v1/auth/bootstrap \
+  -H "X-AgentGate-Bootstrap-Token: ${AGENTGATE_BOOTSTRAP_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
     "tenant_name":"Customer Pilot",
@@ -143,7 +144,7 @@ curl -X POST https://api.agentgate.example.com/v1/auth/bootstrap \
   }'
 ```
 
-After the first owner exists, bootstrap locks by design.
+After the first owner exists, remove the bootstrap token from the API configuration and restart the service. Bootstrap also locks once a user exists.
 
 Do not use demo seed credentials in a real company rehearsal.
 

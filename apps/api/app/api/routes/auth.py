@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Cookie, Depends, Request, Response, status
+from secrets import compare_digest
+
+from fastapi import APIRouter, Cookie, Depends, Header, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.api.deps import get_current_user, require_roles
 from app.core.config import get_settings
 from app.core.enums import AuditActorType, UserRole
 from app.core.errors import AppError
+from app.core.networking import is_production_like_environment
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.schemas.auth import (
@@ -66,7 +69,15 @@ def bootstrap_owner(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
+    bootstrap_token: str | None = Header(default=None, alias="X-AgentGate-Bootstrap-Token"),
 ) -> TokenResponse:
+    settings = get_settings()
+    expected_token = settings.bootstrap_token
+    if expected_token is not None or is_production_like_environment(settings.environment):
+        if not expected_token or not compare_digest(
+            (bootstrap_token or "").encode("utf-8"), expected_token.encode("utf-8")
+        ):
+            raise AppError("Owner bootstrap is unavailable.", status_code=403, code="bootstrap_forbidden")
     access_token = auth_service.bootstrap_owner(db, payload)
     token_payload = decode_access_token(access_token)
     request.state.tenant_id = token_payload.tenant_id

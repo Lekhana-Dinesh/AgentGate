@@ -25,6 +25,7 @@ from app.core.metrics import get_metrics_registry
 from app.models import Agent, ApprovalRequest, Policy, Tool, ToolCall, User
 from app.schemas.gateway import (
     GatewayDecisionResponse,
+    IntentCheckResult,
     PolicyEvaluationResult,
     ToolCallRequest,
 )

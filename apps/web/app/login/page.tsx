@@ -33,9 +33,9 @@ function formatSSOError(code: string | null): string | null {
 export default function LoginPage() {
   const { token, login, completeLogin } = useSession();
   const [hydrated, setHydrated] = useState(false);
-  const [email, setEmail] = useState("admin@demo.agentgate.example.com");
-  const [password, setPassword] = useState("AgentGate123!");
-  const [tenantSlug, setTenantSlug] = useState("demo-agentgate");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [tenantSlug, setTenantSlug] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -209,7 +209,7 @@ export default function LoginPage() {
           <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Operator Login</p>
           <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">Access AgentGate</h2>
           <p className="mt-2 text-sm text-slate-500">
-            Use the seeded demo tenant or your local bootstrap account.
+            Sign in with your tenant account. For a local demo, follow the repository quickstart.
           </p>
           {sessionExpired ? (
             <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -256,7 +256,7 @@ export default function LoginPage() {
                 type="password"
               />
             </div>
-            {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+            {error ? <p role="alert" className="text-sm text-rose-700">{error}</p> : null}
             <Button className="w-full" disabled={!hydrated || loading || ssoProcessing} type="submit">
               {loading ? "Signing in..." : "Sign in"}
             </Button>
@@ -287,15 +287,6 @@ export default function LoginPage() {
             ) : null}
           </div>
 
-          <div className="mt-8 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-            <p className="font-semibold text-slate-800">Seeded demo access</p>
-            <p className="mt-2">
-              Admin: <code>admin@demo.agentgate.example.com</code> / <code>AgentGate123!</code>
-            </p>
-            <p className="mt-1">
-              Reviewer: <code>reviewer@demo.agentgate.example.com</code> / <code>AgentGate123!</code>
-            </p>
-          </div>
         </Card>
       </div>
     </div>

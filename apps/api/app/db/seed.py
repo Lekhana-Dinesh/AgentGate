@@ -382,8 +382,8 @@ def seed() -> None:
         db.commit()
         print("Seed complete.")
         print("Tenant slug: demo-agentgate")
-        print("Admin login: admin@demo.agentgate.example.com / AgentGate123!")
-        print("Reviewer login: reviewer@demo.agentgate.example.com / AgentGate123!")
+        print("Admin login: admin@demo.agentgate.example.com")
+        print("Reviewer login: reviewer@demo.agentgate.example.com")
     finally:
         db.close()
 

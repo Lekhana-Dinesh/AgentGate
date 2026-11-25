@@ -54,7 +54,7 @@ jobs:
         run: python -m pytest app/tests -q -o cache_dir=.tmp/pytest_cache
 
   frontend:
-    name: Frontend Build
+    name: Frontend Checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -73,6 +73,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
 
       - name: Build frontend
         run: npm run build

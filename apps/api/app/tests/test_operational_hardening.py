@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import math
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
 
 from app.api.routes import health as health_routes
+from app.api.routes import auth as auth_routes
 from app.core.config import Settings, get_settings
 from app.core.enums import JobStatus, JobType, UserRole
 from app.core.security import hash_password
@@ -33,6 +35,36 @@ def _production_settings_kwargs() -> dict:
         "rate_limit_provider": "redis",
         "redis_url": "redis://redis.example.internal:6379/0",
     }
+
+
+def test_bootstrap_token_must_be_strong_and_distinct():
+    with pytest.raises(ValueError, match="AGENTGATE_BOOTSTRAP_TOKEN"):
+        Settings(bootstrap_token="change-me")
+    settings = _production_settings_kwargs()
+    with pytest.raises(ValueError, match="AGENTGATE_BOOTSTRAP_TOKEN"):
+        Settings(**settings, bootstrap_token=settings["secret_key"])
+
+
+def test_production_bootstrap_requires_setup_token_and_locks_after_first_owner(client, monkeypatch):
+    setup_token = Fernet.generate_key().decode("ascii")
+    config = SimpleNamespace(environment="production", bootstrap_token=None)
+    monkeypatch.setattr(auth_routes, "get_settings", lambda: config)
+    payload = {
+        "tenant_name": "Example Tenant",
+        "tenant_slug": "example-tenant",
+        "email": "owner@example.com",
+        "full_name": "Example Owner",
+        "password": Fernet.generate_key().decode("ascii"),
+    }
+    route = "/v1/auth/bootstrap"
+    header = "X-AgentGate-Bootstrap-Token"
+
+    assert client.post(route, json=payload, headers={header: setup_token}).status_code == 403
+    config.bootstrap_token = setup_token
+    assert client.post(route, json=payload).status_code == 403
+    assert client.post(route, json=payload, headers={header: "wrong-token"}).status_code == 403
+    assert client.post(route, json=payload, headers={header: setup_token}).status_code == 201
+    assert client.post(route, json=payload, headers={header: setup_token}).status_code == 409
 
 
 class _FakeRedisPipeline:
