@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: agentgate
       POSTGRES_PASSWORD: agentgate
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${AGENTGATE_LOCAL_POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +18,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${AGENTGATE_LOCAL_REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -107,7 +107,7 @@ services:
       AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_LIMIT: ${AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_LIMIT:-4}
       AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_WINDOW_SECONDS: ${AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_WINDOW_SECONDS:-300}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${AGENTGATE_LOCAL_API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,7 +125,7 @@ services:
     build:
       context: ./apps/api
     command: ["python", "-m", "app.worker"]
-    environment:
+    environment: &worker_environment
       AGENTGATE_ENV: ${AGENTGATE_ENV:-development}
       AGENTGATE_DEBUG: ${AGENTGATE_DEBUG:-true}
       AGENTGATE_SECRET_KEY: ${AGENTGATE_SECRET_KEY:-change-me-to-a-long-random-development-secret}
@@ -201,7 +201,7 @@ services:
       AGENTGATE_RATE_LIMIT_JOBS_RETRY_WINDOW_SECONDS: ${AGENTGATE_RATE_LIMIT_JOBS_RETRY_WINDOW_SECONDS:-300}
       AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_LIMIT: ${AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_LIMIT:-4}
       AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_WINDOW_SECONDS: ${AGENTGATE_RATE_LIMIT_AUDIT_INTEGRITY_WINDOW_SECONDS:-300}
-    depends_on:
+    depends_on: &background_dependencies
       postgres:
         condition: service_healthy
       redis:
@@ -209,16 +209,28 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  scheduler:
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "app.scheduler"]
+    environment: *worker_environment
+    depends_on: *background_dependencies
+
   web:
     build:
       context: ./apps/web
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${AGENTGATE_LOCAL_WEB_PORT:-3000}:3000"
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   migrate:
     build:
